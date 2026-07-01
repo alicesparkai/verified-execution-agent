@@ -7,6 +7,10 @@ the chain, VEA asks one question: *"Should this really happen?"* — and it can 
 > Submission for **KeeperHub — "Agents Onchain"** · theme: *reliable on-chain
 > execution / the last mile.*
 
+![Reliability Dashboard — the verified-execution trail: 1 executed, 2 prevented](docs_dashboard_preview.png)
+
+*The Reliability Dashboard: every intent the agent considered, what the gate decided, and why. Green passed to the chain; red was blocked before it could do damage.*
+
 ---
 
 ## The problem: the last mile
