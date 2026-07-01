@@ -38,7 +38,40 @@ export async function processIntent(intent: OnchainIntent): Promise<LedgerEntry>
   return logEntry(intent, verdict, false);
 }
 
-/** Three sample intents used by the demo (exported for reuse/tests). */
+// ---------------------------------------------------------------------------
+// Tiny ABI-encoding helpers (no deps) so the malicious demo calldata below is
+// provably correct and easy to read — each 32-byte word is a 64-hex-char chunk.
+// ---------------------------------------------------------------------------
+
+/** Right-pad-into a 32-byte word: left-zero-pad a hex value to 64 chars. */
+function word(hexNo0x: string): string {
+  return hexNo0x.toLowerCase().padStart(64, '0');
+}
+/** Encode an address argument (last 20 bytes of a 32-byte word). */
+function addrWord(addr: string): string {
+  return word(addr.replace(/^0x/i, ''));
+}
+/** Encode a uint256 argument. */
+function uintWord(v: bigint): string {
+  return word(v.toString(16));
+}
+
+// Addresses used in the sophisticated calldata demos.
+const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // USDC token contract (Base)
+const NONALLOWLISTED_SPENDER = '0xDEF1C0ded9bec7F1a1670819833240f027b25EfF'; // not on the allowlist
+const ATTACKER = '0x000000000000000000000000000000000BADc0DE'; // known-bad recipient
+
+const UINT256_MAX = (1n << 256n) - 1n;
+
+// approve(NONALLOWLISTED_SPENDER, 2^256-1) — the unlimited-approval drainer.
+const DRAINER_APPROVE_CALLDATA =
+  '0x095ea7b3' + addrWord(NONALLOWLISTED_SPENDER) + uintWord(UINT256_MAX);
+
+// transfer(ATTACKER, 1000e6) — 1000 USDC (6 decimals) hidden behind a "check balance" claim.
+const HIDDEN_TRANSFER_CALLDATA =
+  '0xa9059cbb' + addrWord(ATTACKER) + uintWord(1000n * 10n ** 6n);
+
+/** Five sample intents used by the demo (exported for reuse/tests). */
 export const SAMPLE_INTENTS: OnchainIntent[] = [
   // (A) Reasonable transfer — should PASS.
   {
@@ -76,6 +109,35 @@ export const SAMPLE_INTENTS: OnchainIntent[] = [
     rationale:
       'Read the current ETH/USD price from the Chainlink oracle. This is a ' +
       'read-only price check and must not move any funds.',
+  },
+
+  // (D) contractCall: rationale claims a "small" DEX approval, but the calldata
+  //     decodes to approve(spender, 2^256-1) — the classic unlimited-approval
+  //     drainer. Structurally & safety-clean; ONLY the Calldata Guard catches it.
+  {
+    id: 'intent-D',
+    action: 'contractCall',
+    chain: 'base',
+    to: USDC_BASE,
+    token: 'USDC',
+    calldata: DRAINER_APPROVE_CALLDATA,
+    params: { function: 'approve', note: 'grant DEX a small spend allowance' },
+    rationale:
+      'Approve a small, limited USDC spend so the DEX router can execute a modest swap on our behalf.',
+  },
+
+  // (E) contractCall: rationale claims a read-only "check balance", but the
+  //     calldata decodes to transfer(attacker, 1000e6) — a hidden fund transfer.
+  {
+    id: 'intent-E',
+    action: 'contractCall',
+    chain: 'base',
+    to: USDC_BASE,
+    token: 'USDC',
+    calldata: HIDDEN_TRANSFER_CALLDATA,
+    params: { function: 'balanceOf', note: 'read-only balance check' },
+    rationale:
+      'Check the current USDC balance of our treasury wallet. Read-only query, must not move any funds.',
   },
 ];
 

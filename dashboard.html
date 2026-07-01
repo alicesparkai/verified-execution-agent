@@ -22,6 +22,7 @@
     --struct: #f4b740;
     --safety: #ff8a5b;
     --llm: #b98bff;
+    --calldata: #35d0d6;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -141,6 +142,7 @@
   .layer.structural { background: rgba(244,183,64,0.14); color: var(--struct); border: 1px solid rgba(244,183,64,0.3); }
   .layer.safety { background: rgba(255,138,91,0.14); color: var(--safety); border: 1px solid rgba(255,138,91,0.3); }
   .layer.llm { background: rgba(185,139,255,0.14); color: var(--llm); border: 1px solid rgba(185,139,255,0.3); }
+  .layer.calldata { background: rgba(53,208,214,0.14); color: var(--calldata); border: 1px solid rgba(53,208,214,0.32); }
   .layer.info { background: rgba(138,151,177,0.12); color: var(--muted); border: 1px solid var(--line); }
   .reasons li .rtext { color: var(--muted); }
 
@@ -198,7 +200,7 @@
   // Falls back to an empty trail if opened as a raw template.
   window.__LEDGER__ = [
   {
-    "timestamp": "2026-07-01T17:12:39.023Z",
+    "timestamp": "2026-07-01T17:59:38.771Z",
     "intent": {
       "id": "intent-A",
       "action": "transfer",
@@ -222,7 +224,7 @@
     }
   },
   {
-    "timestamp": "2026-07-01T17:12:39.494Z",
+    "timestamp": "2026-07-01T17:59:39.275Z",
     "intent": {
       "id": "intent-B",
       "action": "transfer",
@@ -244,7 +246,7 @@
     "executed": false
   },
   {
-    "timestamp": "2026-07-01T17:12:40.242Z",
+    "timestamp": "2026-07-01T17:59:39.756Z",
     "intent": {
       "id": "intent-C",
       "action": "transfer",
@@ -259,6 +261,57 @@
       "confidence": 0.75,
       "reasons": [
         "LLM: flagged as unsafe/anomalous — The action transfers 5,000 USDC to an address, but the rationale claims only a read-only price check with no fund movement. The intent is inconsistent and potentially malicious."
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-01T17:59:50.756Z",
+    "intent": {
+      "id": "intent-D",
+      "action": "contractCall",
+      "chain": "base",
+      "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "token": "USDC",
+      "calldata": "0x095ea7b3000000000000000000000000def1c0ded9bec7f1a1670819833240f027b25effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "params": {
+        "function": "approve",
+        "note": "grant DEX a small spend allowance"
+      },
+      "rationale": "Approve a small, limited USDC spend so the DEX router can execute a modest swap on our behalf."
+    },
+    "verdict": {
+      "decision": "BLOCK",
+      "confidence": 1,
+      "reasons": [
+        "Calldata: [BLOCK] unlimited-approval drainer: approve(0xdef1…5eff, 2^256-1 (uint256 max)) grants an effectively-unlimited approve allowance — the #1 real-world wallet-drain pattern. This directly contradicts the stated \"small/limited spend\" rationale.",
+        "LLM: flagged as unsafe/anomalous — The proposed contractCall lacks required approve parameters (spender address and amount) and the target address (0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913) is not a known DEX router on Base, making the intent ambiguous and potentially malicious. The action does not clearly match the rationale of granting a small, limited allowance for a modest swap."
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-01T18:01:12.909Z",
+    "intent": {
+      "id": "intent-E",
+      "action": "contractCall",
+      "chain": "base",
+      "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "token": "USDC",
+      "calldata": "0xa9059cbb000000000000000000000000000000000000000000000000000000000badc0de000000000000000000000000000000000000000000000000000000003b9aca00",
+      "params": {
+        "function": "balanceOf",
+        "note": "read-only balance check"
+      },
+      "rationale": "Check the current USDC balance of our treasury wallet. Read-only query, must not move any funds."
+    },
+    "verdict": {
+      "decision": "BLOCK",
+      "confidence": 1,
+      "reasons": [
+        "Calldata: [BLOCK] hidden state-changing call: rationale claims a read-only/balance check, but calldata invokes transfer(address,uint256) — which moves funds or grants permissions.",
+        "Calldata: [BLOCK] transfer() sends funds to known-bad recipient 0x0000…c0de.",
+        "LLM: unavailable (deterministic checks still enforced) — LLM returned unparseable output"
       ]
     },
     "executed": false
@@ -286,6 +339,7 @@
     var r = String(reason || "");
     if (/^Structural:/i.test(r)) return { layer: "structural", label: "Structural" };
     if (/^Safety:/i.test(r)) return { layer: "safety", label: "Safety" };
+    if (/^Calldata:/i.test(r)) return { layer: "calldata", label: "Calldata" };
     if (/^LLM:/i.test(r)) return { layer: "llm", label: "LLM" };
     return { layer: "info", label: "Note" };
   }
@@ -339,7 +393,7 @@
     var reasons = (verdict.reasons || []).map(function (r) {
       var c = classify(r);
       // Strip the "Layer:" prefix from the visible text since it's now a badge.
-      var text = String(r).replace(/^(Structural|Safety|LLM):\s*/i, "");
+      var text = String(r).replace(/^(Structural|Safety|Calldata|LLM):\s*/i, "");
       return '<li><span class="layer ' + c.layer + '">' + esc(c.label) + '</span>' +
         '<span class="rtext">' + esc(text) + '</span></li>';
     }).join("");

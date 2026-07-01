@@ -2,10 +2,13 @@
  * The Verification Gate — the heart of VEA.
  *
  * Before ANY on-chain action is executed, it must pass this gate.
- * The gate runs three independent checks and combines them into a single Verdict:
+ * The gate runs four independent checks and combines them into a single Verdict:
  *
  *   (a) Structural validation  — is the intent well-formed? (deterministic)
  *   (b) Safety rules           — is it obviously dangerous?  (deterministic)
+ *   (d) Calldata Guard          — DECODE contractCall calldata and judge what it
+ *                                 REALLY does: unlimited-approval drainers, hidden
+ *                                 transfers, blanket NFT approvals. (deterministic)
  *   (c) LLM sanity check        — does the action match its stated rationale,
  *                                 and does it look non-anomalous? (probabilistic)
  *
@@ -16,6 +19,7 @@
 
 import { setGlobalDispatcher, ProxyAgent } from 'undici';
 import type { OnchainIntent, Verdict } from './types.js';
+import { analyzeCalldata } from './calldataGuard.js';
 
 // ---------------------------------------------------------------------------
 // Network setup: this machine reaches the internet via a local Xray proxy.
@@ -294,9 +298,10 @@ async function backoff(attempt: number): Promise<void> {
  * Run the full three-layer verification gate on an intent.
  *
  * Decision rule:
- *   - Any structural OR safety problem  => BLOCK.
- *   - LLM explicitly says unsafe        => BLOCK.
- *   - Otherwise                         => PASS.
+ *   - Any structural OR safety problem     => BLOCK.
+ *   - Any Calldata Guard BLOCK finding      => BLOCK (deterministic).
+ *   - LLM explicitly says unsafe            => BLOCK.
+ *   - Otherwise                             => PASS.
  *
  * Confidence:
  *   - Deterministic BLOCK  => 1.0 (we are certain it is malformed/dangerous).
@@ -311,7 +316,17 @@ export async function verifyIntent(intent: OnchainIntent): Promise<Verdict> {
   const safety = safetyCheck(intent);
   reasons.push(...structural, ...safety);
 
-  const deterministicFail = structural.length > 0 || safety.length > 0;
+  // (d) Calldata Guard — decode any contractCall calldata and judge what it
+  // really does. BLOCK-severity findings are deterministic: like the safety
+  // layer, they can never be rescued by the LLM. FLAG/INFO findings only
+  // annotate the verdict.
+  const calldata = analyzeCalldata(intent);
+  const calldataBlock = calldata.findings.some((f) => f.severity === 'BLOCK');
+  for (const f of calldata.findings) {
+    reasons.push(`Calldata: [${f.severity}] ${f.message}`);
+  }
+
+  const deterministicFail = structural.length > 0 || safety.length > 0 || calldataBlock;
 
   // Always consult the LLM for the second opinion (even on structural fails it's
   // cheap context), but its verdict only *adds* BLOCK reasons — it never rescues

@@ -22,6 +22,7 @@
     --struct: #f4b740;
     --safety: #ff8a5b;
     --llm: #b98bff;
+    --calldata: #35d0d6;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -141,6 +142,7 @@
   .layer.structural { background: rgba(244,183,64,0.14); color: var(--struct); border: 1px solid rgba(244,183,64,0.3); }
   .layer.safety { background: rgba(255,138,91,0.14); color: var(--safety); border: 1px solid rgba(255,138,91,0.3); }
   .layer.llm { background: rgba(185,139,255,0.14); color: var(--llm); border: 1px solid rgba(185,139,255,0.3); }
+  .layer.calldata { background: rgba(53,208,214,0.14); color: var(--calldata); border: 1px solid rgba(53,208,214,0.32); }
   .layer.info { background: rgba(138,151,177,0.12); color: var(--muted); border: 1px solid var(--line); }
   .reasons li .rtext { color: var(--muted); }
 
@@ -219,6 +221,7 @@
     var r = String(reason || "");
     if (/^Structural:/i.test(r)) return { layer: "structural", label: "Structural" };
     if (/^Safety:/i.test(r)) return { layer: "safety", label: "Safety" };
+    if (/^Calldata:/i.test(r)) return { layer: "calldata", label: "Calldata" };
     if (/^LLM:/i.test(r)) return { layer: "llm", label: "LLM" };
     return { layer: "info", label: "Note" };
   }
@@ -272,7 +275,7 @@
     var reasons = (verdict.reasons || []).map(function (r) {
       var c = classify(r);
       // Strip the "Layer:" prefix from the visible text since it's now a badge.
-      var text = String(r).replace(/^(Structural|Safety|LLM):\s*/i, "");
+      var text = String(r).replace(/^(Structural|Safety|Calldata|LLM):\s*/i, "");
       return '<li><span class="layer ' + c.layer + '">' + esc(c.label) + '</span>' +
         '<span class="rtext">' + esc(text) + '</span></li>';
     }).join("");
