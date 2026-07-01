@@ -60,6 +60,8 @@ gracefully and still enforces every deterministic rule.
 | `src/ledger.ts` | append-only JSONL reliability ledger |
 | `src/agent.ts` | the loop: `processIntent()` → verify → execute-or-skip → log; `runDemo()` |
 | `src/demo.ts` | runs the demo with 3 sample intents |
+| `src/buildDashboard.ts` | injects the live ledger into `dashboard.template.html` → `dashboard.html` |
+| `dashboard.template.html` | self-contained dark-theme dashboard (inline CSS/JS, no build, no CDN) |
 
 The verification core is **platform-independent**. The only KeeperHub-specific
 code is `keeperhubAdapter.ts`, kept behind a clean interface so it swaps in
@@ -93,6 +95,32 @@ You should see:
 
 To compile to `dist/` instead: `npm run build && npm run demo:built`.
 
+## Reliability Dashboard
+
+The ledger is also viewable as a clean visual **verified-execution trail** — handy
+for demos and for eyeballing what the gate blocked (and what it let through).
+
+```bash
+npm run demo         # (re)generate ledger.jsonl
+npm run dashboard    # build dashboard.html from the current ledger
+# then just double-click dashboard.html — or:
+npm run demo:full    # do both in one step
+```
+
+`npm run dashboard` reads `ledger.jsonl`, injects it into `dashboard.template.html`
+(replacing the `window.__LEDGER__` placeholder with the live data), and writes a
+single **self-contained `dashboard.html`**. It has **no build step and no external
+/ CDN dependencies**, so it opens **offline by double-click** (`file://`).
+
+It shows:
+
+- **Summary cards** — intents considered, # executed (PASS), # prevented (BLOCK),
+  and **value protected** (sum of blocked amounts).
+- **A timeline card per intent** — action + chain + amount/token, the agent's
+  quoted rationale, a big **PASS (green) / BLOCK (red)** badge with confidence %,
+  the verdict reasons tagged by the layer that caught them (**structural /
+  safety / LLM**), and the (stub) tx hash with a *confirmed* tag when executed.
+
 ### Networking note (proxy)
 
 This machine reaches the internet through a local **Xray proxy**. The gate routes
@@ -120,8 +148,9 @@ never a single point of failure.
 
 Reliability isn't a faster path to the chain — it's a *gate* in front of it. VEA
 makes the agent's reasoning **auditable** (rationale is a first-class field) and
-its actions **accountable** (every verdict is logged, forever). That's what
-"reliable on-chain execution" should mean at the last mile.
+its actions **accountable** (every verdict is logged, forever, and rendered as a
+visual trail in the **Reliability Dashboard**). That's what "reliable on-chain
+execution" should mean at the last mile.
 
 ---
 

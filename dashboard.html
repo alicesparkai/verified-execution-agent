@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VEA — Reliability Ledger</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-2: #111725;
+    --card: #151c2c;
+    --card-2: #1a2334;
+    --line: #26314a;
+    --text: #e7ecf4;
+    --muted: #8a97b1;
+    --faint: #5f6c88;
+    --pass: #22c98a;
+    --pass-dim: rgba(34, 201, 138, 0.14);
+    --block: #ff5d6c;
+    --block-dim: rgba(255, 93, 108, 0.14);
+    --accent: #6ea8fe;
+    --struct: #f4b740;
+    --safety: #ff8a5b;
+    --llm: #b98bff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 20% -10%, #16203a 0%, var(--bg) 55%) fixed;
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* Header */
+  header.hero {
+    border: 1px solid var(--line);
+    background: linear-gradient(180deg, var(--bg-2), var(--card));
+    border-radius: 18px;
+    padding: 28px 30px;
+    margin-bottom: 26px;
+  }
+  .hero .kicker {
+    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--accent); font-weight: 700; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pass);
+         box-shadow: 0 0 0 4px var(--pass-dim); }
+  .hero h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.01em; }
+  .hero p { margin: 0; color: var(--muted); font-size: 15px; max-width: 720px; }
+  .hero .flow {
+    margin-top: 16px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px; color: var(--faint);
+  }
+  .hero .flow b { color: var(--text); }
+
+  /* Summary cards */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 30px; }
+  .stat {
+    border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px;
+    background: var(--card); position: relative; overflow: hidden;
+  }
+  .stat::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: var(--accent);
+  }
+  .stat.pass::before { background: var(--pass); }
+  .stat.block::before { background: var(--block); }
+  .stat.value::before { background: var(--struct); }
+  .stat .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat .num { font-size: 30px; font-weight: 800; margin-top: 6px; letter-spacing: -0.02em; }
+  .stat.pass .num { color: var(--pass); }
+  .stat.block .num { color: var(--block); }
+  .stat.value .num { color: var(--struct); }
+  .stat .sub { font-size: 12px; color: var(--faint); margin-top: 2px; }
+
+  .section-title {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--muted); margin: 0 0 16px; font-weight: 700;
+  }
+
+  /* Timeline */
+  .timeline { position: relative; padding-left: 26px; }
+  .timeline::before {
+    content: ""; position: absolute; left: 7px; top: 6px; bottom: 6px; width: 2px;
+    background: linear-gradient(var(--line), transparent);
+  }
+  .entry { position: relative; margin-bottom: 20px; }
+  .entry .node {
+    position: absolute; left: -26px; top: 22px; width: 16px; height: 16px;
+    border-radius: 50%; border: 3px solid var(--bg); background: var(--pass);
+  }
+  .entry.block .node { background: var(--block); }
+
+  .card {
+    border: 1px solid var(--line); border-radius: 16px; background: var(--card);
+    padding: 20px 22px; box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  }
+  .entry.pass .card { border-left: 4px solid var(--pass); }
+  .entry.block .card { border-left: 4px solid var(--block); background: linear-gradient(180deg, var(--card), rgba(255,93,108,0.03)); }
+
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .id-line { font-size: 12px; color: var(--faint); font-family: ui-monospace, Menlo, Consolas, monospace; margin-bottom: 6px; }
+  .action { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .action .chain {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent); background: rgba(110,168,254,0.12); border: 1px solid rgba(110,168,254,0.25);
+    padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle;
+  }
+  .amount { margin-top: 8px; font-size: 15px; color: var(--text); }
+  .amount b { font-size: 18px; }
+  .amount .token { color: var(--muted); font-weight: 600; }
+  .to { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
+
+  .badge {
+    flex-shrink: 0; text-align: center; border-radius: 12px; padding: 10px 16px; min-width: 118px;
+  }
+  .badge .decision { font-size: 22px; font-weight: 900; letter-spacing: 0.04em; }
+  .badge .conf { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; opacity: 0.85; }
+  .badge.pass { background: var(--pass-dim); color: var(--pass); border: 1px solid rgba(34,201,138,0.35); }
+  .badge.block { background: var(--block-dim); color: var(--block); border: 1px solid rgba(255,93,108,0.35); }
+
+  .rationale {
+    margin: 16px 0; padding: 12px 16px; border-left: 3px solid var(--line);
+    background: var(--card-2); border-radius: 0 10px 10px 0; color: var(--text);
+    font-style: italic; font-size: 14px;
+  }
+  .rationale::before { content: "\201C"; color: var(--faint); font-size: 20px; font-style: normal; margin-right: 2px; }
+  .rationale::after { content: "\201D"; color: var(--faint); font-size: 20px; font-style: normal; }
+
+  .reasons-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint); margin: 4px 0 8px; }
+  .reasons { list-style: none; margin: 0; padding: 0; }
+  .reasons li { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; font-size: 13.5px; color: var(--text); }
+  .layer {
+    flex-shrink: 0; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 2px 8px; border-radius: 999px; min-width: 74px; text-align: center;
+  }
+  .layer.structural { background: rgba(244,183,64,0.14); color: var(--struct); border: 1px solid rgba(244,183,64,0.3); }
+  .layer.safety { background: rgba(255,138,91,0.14); color: var(--safety); border: 1px solid rgba(255,138,91,0.3); }
+  .layer.llm { background: rgba(185,139,255,0.14); color: var(--llm); border: 1px solid rgba(185,139,255,0.3); }
+  .layer.info { background: rgba(138,151,177,0.12); color: var(--muted); border: 1px solid var(--line); }
+  .reasons li .rtext { color: var(--muted); }
+
+  .exec {
+    margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding-top: 14px; border-top: 1px dashed var(--line);
+  }
+  .exec .tx-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--faint); }
+  .exec .tx { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--accent); word-break: break-all; }
+  .confirmed {
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--pass); background: var(--pass-dim); border: 1px solid rgba(34,201,138,0.35);
+    padding: 3px 10px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .prevented {
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--block); background: var(--block-dim); border: 1px solid rgba(255,93,108,0.35);
+    padding: 3px 10px; border-radius: 999px;
+  }
+
+  footer { margin-top: 44px; text-align: center; color: var(--faint); font-size: 12px; }
+  footer b { color: var(--muted); }
+  .empty { color: var(--muted); text-align: center; padding: 40px; border: 1px dashed var(--line); border-radius: 14px; }
+
+  @media (max-width: 720px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .card-top { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <div class="kicker"><span class="dot"></span> Verified Execution Agent</div>
+    <h1>Reliability Ledger</h1>
+    <p>The last mile is where autonomous agents fail — the moment an intent becomes an
+       irreversible on-chain transaction. VEA puts a verification gate in front of the chain
+       and keeps the receipts. This is the append-only trail of every decision it made.</p>
+    <div class="flow">OnchainIntent &rarr; <b>[ VERIFICATION GATE ]</b> &rarr; PASS &rarr; execute &nbsp;|&nbsp; BLOCK &rarr; never touches the chain</div>
+  </header>
+
+  <div class="cards" id="cards"></div>
+
+  <h2 class="section-title">Verified execution trail</h2>
+  <div class="timeline" id="timeline"></div>
+
+  <footer>
+    Generated from <b>ledger.jsonl</b> · confidence = how strongly the gate's layers agree ·
+    on-chain execution is an honest stub until wired to KeeperHub.
+  </footer>
+</div>
+
+<script id="ledger-data">
+  // Injected at build time by src/buildDashboard.ts (`npm run dashboard`).
+  // Falls back to an empty trail if opened as a raw template.
+  window.__LEDGER__ = [
+  {
+    "timestamp": "2026-07-01T17:12:39.023Z",
+    "intent": {
+      "id": "intent-A",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 250,
+      "token": "USDC",
+      "rationale": "Pay the monthly infrastructure invoice of 250 USDC to our verified vendor wallet."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.95,
+      "reasons": [
+        "LLM: action is consistent with rationale — The transfer of 250 USDC to the specified vendor address aligns with the stated monthly invoice payment rationale and does not raise any anomalous or dangerous indicators."
+      ]
+    },
+    "executed": true,
+    "execution": {
+      "txHash": "0x0032495800324958003249580032495800324958003249580032495800324958",
+      "status": "confirmed(simulated)"
+    }
+  },
+  {
+    "timestamp": "2026-07-01T17:12:39.494Z",
+    "intent": {
+      "id": "intent-B",
+      "action": "transfer",
+      "chain": "ethereum",
+      "to": "0x0000000000000000000000000000000000000000",
+      "amount": 999999999,
+      "token": "USDC",
+      "rationale": "Sweep the treasury into a new cold-storage account for safekeeping."
+    },
+    "verdict": {
+      "decision": "BLOCK",
+      "confidence": 1,
+      "reasons": [
+        "Safety: destination is the zero address (funds would be burned).",
+        "Safety: amount 999999999 exceeds cap 1000000 (possible fat-finger or exploit).",
+        "LLM: flagged as unsafe/anomalous — The action transfers USDC to the zero address, which burns the tokens, not to a cold-storage account. This contradicts the rationale and is a dangerous, anomalous operation."
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-01T17:12:40.242Z",
+    "intent": {
+      "id": "intent-C",
+      "action": "transfer",
+      "chain": "arbitrum",
+      "to": "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B",
+      "amount": 5000,
+      "token": "USDC",
+      "rationale": "Read the current ETH/USD price from the Chainlink oracle. This is a read-only price check and must not move any funds."
+    },
+    "verdict": {
+      "decision": "BLOCK",
+      "confidence": 0.75,
+      "reasons": [
+        "LLM: flagged as unsafe/anomalous — The action transfers 5,000 USDC to an address, but the rationale claims only a read-only price check with no fund movement. The intent is inconsistent and potentially malicious."
+      ]
+    },
+    "executed": false
+  }
+];
+</script>
+
+<script>
+(function () {
+  var raw = window.__LEDGER__;
+  var entries = Array.isArray(raw) ? raw : [];
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function num(a) { var n = Number(a); return isFinite(n) ? n : 0; }
+  function fmt(n) {
+    return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  }
+
+  // Classify a verdict reason string into the layer that produced it.
+  function classify(reason) {
+    var r = String(reason || "");
+    if (/^Structural:/i.test(r)) return { layer: "structural", label: "Structural" };
+    if (/^Safety:/i.test(r)) return { layer: "safety", label: "Safety" };
+    if (/^LLM:/i.test(r)) return { layer: "llm", label: "LLM" };
+    return { layer: "info", label: "Note" };
+  }
+
+  // ---- Summary cards ----
+  var total = entries.length;
+  var passCount = 0, blockCount = 0, valueProtected = 0;
+  entries.forEach(function (e) {
+    var d = e && e.verdict && e.verdict.decision;
+    if (d === "PASS") passCount++;
+    else if (d === "BLOCK") {
+      blockCount++;
+      valueProtected += num(e.intent && e.intent.amount);
+    }
+  });
+
+  var cards = [
+    { cls: "", label: "Intents considered", num: total, sub: "passed through the gate" },
+    { cls: "pass", label: "Executed", num: passCount, sub: "PASS · reached the chain" },
+    { cls: "block", label: "Prevented", num: blockCount, sub: "BLOCK · never executed" },
+    { cls: "value", label: "Value protected", num: fmt(valueProtected), sub: "sum of blocked amounts" }
+  ];
+  document.getElementById("cards").innerHTML = cards.map(function (c) {
+    return '<div class="stat ' + c.cls + '">' +
+      '<div class="label">' + esc(c.label) + '</div>' +
+      '<div class="num">' + esc(c.num) + '</div>' +
+      '<div class="sub">' + esc(c.sub) + '</div>' +
+      '</div>';
+  }).join("");
+
+  // ---- Timeline ----
+  var tl = document.getElementById("timeline");
+  if (!entries.length) {
+    tl.innerHTML = '<div class="empty">No ledger entries yet. Run <b>npm run demo</b> then <b>npm run dashboard</b>.</div>';
+    return;
+  }
+
+  tl.innerHTML = entries.map(function (e) {
+    var intent = e.intent || {};
+    var verdict = e.verdict || {};
+    var isPass = verdict.decision === "PASS";
+    var cls = isPass ? "pass" : "block";
+    var conf = Math.round(num(verdict.confidence) * 100);
+
+    var amountHtml = "";
+    if (intent.amount != null) {
+      amountHtml = '<div class="amount"><b>' + esc(fmt(num(intent.amount))) + '</b> ' +
+        '<span class="token">' + esc(intent.token || "") + '</span></div>';
+    }
+
+    var reasons = (verdict.reasons || []).map(function (r) {
+      var c = classify(r);
+      // Strip the "Layer:" prefix from the visible text since it's now a badge.
+      var text = String(r).replace(/^(Structural|Safety|LLM):\s*/i, "");
+      return '<li><span class="layer ' + c.layer + '">' + esc(c.label) + '</span>' +
+        '<span class="rtext">' + esc(text) + '</span></li>';
+    }).join("");
+
+    var execHtml;
+    if (e.executed && e.execution) {
+      execHtml = '<div class="exec">' +
+        '<span class="tx-label">tx</span>' +
+        '<span class="tx">' + esc(e.execution.txHash) + '</span>' +
+        '<span class="confirmed">&#10003; ' + esc(e.execution.status || "confirmed") + '</span>' +
+        '</div>';
+    } else {
+      execHtml = '<div class="exec"><span class="prevented">&#10005; Blocked before execution</span></div>';
+    }
+
+    return '<div class="entry ' + cls + '">' +
+      '<span class="node"></span>' +
+      '<div class="card">' +
+        '<div class="card-top">' +
+          '<div>' +
+            '<div class="id-line">' + esc(intent.id || "—") + ' &middot; ' + esc(e.timestamp || "") + '</div>' +
+            '<div class="action">' + esc(intent.action || "action") +
+              '<span class="chain">' + esc(intent.chain || "?") + '</span></div>' +
+            amountHtml +
+            '<div class="to">to ' + esc(intent.to || "") + '</div>' +
+          '</div>' +
+          '<div class="badge ' + cls + '">' +
+            '<div class="decision">' + esc(verdict.decision || "?") + '</div>' +
+            '<div class="conf">' + conf + '% conf</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="rationale">' + esc(intent.rationale || "") + '</div>' +
+        '<div class="reasons-title">Why the gate decided this</div>' +
+        '<ul class="reasons">' + reasons + '</ul>' +
+        execHtml +
+      '</div>' +
+    '</div>';
+  }).join("");
+})();
+</script>
+</body>
+</html>

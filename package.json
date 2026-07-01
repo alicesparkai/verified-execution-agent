@@ -9,7 +9,9 @@
   "scripts": {
     "build": "tsc",
     "demo": "tsx src/demo.ts",
-    "demo:built": "node dist/demo.js"
+    "demo:built": "node dist/demo.js",
+    "dashboard": "tsx src/buildDashboard.ts",
+    "demo:full": "tsx src/demo.ts && tsx src/buildDashboard.ts"
   },
   "dependencies": {
     "undici": "^6.21.0"
