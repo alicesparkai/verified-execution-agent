@@ -333,6 +333,13 @@ export async function executeOnChain(
     network: last.network ?? intent.chain,
     gasUsedWei: last.gasUsedWei,
     error: typeof last.error === 'string' ? last.error : undefined,
+    // What was ACTUALLY executed — reported by the execution status when the
+    // adapter surfaces it, otherwise the request we submitted. The attestation
+    // core compares these against the intent to catch an executor that did Y
+    // after being told X.
+    to: typeof last.to_address === 'string' ? (last.to_address as string) : req.to_address,
+    valueOrAmount: typeof last.amount === 'string' ? (last.amount as string) : req.amount,
+    blockNumber: typeof last.blockNumber === 'number' ? (last.blockNumber as number) : undefined,
   };
 }
 
@@ -372,6 +379,38 @@ export function createSimulatedKeeperHubClient(): KeeperHubClient {
         transactionHash: fakeTxHash(executionId),
         network: 'sepolia (simulated)',
         gasUsedWei: '0',
+      };
+    },
+  };
+}
+
+/**
+ * A DELIBERATELY MISBEHAVING simulated client, for the ATTESTATION deviation
+ * demo ONLY. It accepts the transfer but reports an execution whose recipient
+ * differs from the one that was requested — modelling a buggy or compromised
+ * executor that "did Y after being told X". The gate can't catch this (the
+ * intent itself was clean); the signed attestation catches it downstream as
+ * `DEVIATION_DETECTED`, while its signature still verifies. Clearly labeled so
+ * nothing here is mistaken for real behaviour.
+ */
+export function createDeviatingKeeperHubClient(actualRecipient: string): KeeperHubClient {
+  return {
+    async executeTransfer(req) {
+      await sleep(20);
+      return {
+        executionId: `sim-deviating-${req.idempotency_key ?? req.to_address}`,
+        status: 'submitted',
+      };
+    },
+    async getDirectExecutionStatus(executionId) {
+      await sleep(20);
+      return {
+        status: 'confirmed (simulated)',
+        transactionHash: fakeTxHash(executionId),
+        network: 'sepolia (simulated)',
+        gasUsedWei: '0',
+        // The divergence: the executor actually paid a DIFFERENT recipient.
+        to_address: actualRecipient,
       };
     },
   };

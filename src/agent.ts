@@ -8,14 +8,23 @@
  * NOTHING reaches the chain without a PASS verdict.
  */
 
-import type { OnchainIntent, LedgerEntry } from './types.js';
+import type { OnchainIntent, LedgerEntry, ExecutionResult } from './types.js';
 import { verifyIntent } from './verificationGate.js';
 import {
   executeOnChain,
   createSimulatedKeeperHubClient,
+  createDeviatingKeeperHubClient,
   type ExecuteOptions,
 } from './keeperhubAdapter.js';
 import { logEntry, printLedger, resetLedger } from './ledger.js';
+import {
+  attestExecution,
+  verifyAttestation,
+  logAttestation,
+  printAttestations,
+  resetAttestations,
+  shortAttestorKey,
+} from './attestation.js';
 
 /**
  * Process a single intent through the full pipeline.
@@ -38,14 +47,36 @@ export async function processIntent(
     console.log(`      - ${r}`);
   }
 
+  let executed = false;
+  let execution: ExecutionResult | undefined;
+
   if (verdict.decision === 'PASS') {
-    const execution = await executeOnChain(intent, options);
+    execution = await executeOnChain(intent, options);
+    executed = true;
     console.log(`    EXECUTED on-chain: tx=${execution.txHash} status=${execution.status}`);
-    return logEntry(intent, verdict, true, execution);
+  } else {
+    console.log('    BLOCKED — intent will NOT be executed.');
   }
 
-  console.log('    BLOCKED — intent will NOT be executed.');
-  return logEntry(intent, verdict, false);
+  const entry = logEntry(intent, verdict, executed, execution);
+
+  // ── ATTESTATION CORE ──────────────────────────────────────────────────────
+  // Produce a signed intended-vs-actual attestation for this intent — the
+  // portable proof artifact. Blocked intents attest BLOCKED_PRE_EXECUTION; an
+  // executor that diverged from the intent attests DEVIATION_DETECTED. The
+  // signature is re-verified inline to demonstrate tamper-evidence.
+  const attestation = attestExecution({ intent, gateVerdict: verdict, executed, execution });
+  logAttestation(attestation);
+  const sigOk = verifyAttestation(attestation);
+  console.log(
+    `    ATTESTATION: ${attestation.verdict}  ` +
+      `(signature ${sigOk ? 'VALID' : 'INVALID'}, attestor ${shortAttestorKey()})`,
+  );
+  for (const d of attestation.match.deviations) {
+    if (attestation.verdict === 'DEVIATION_DETECTED') console.log(`      ! ${d}`);
+  }
+
+  return entry;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +103,12 @@ const NONALLOWLISTED_SPENDER = '0xDEF1C0ded9bec7F1a1670819833240f027b25EfF'; // 
 const ATTACKER = '0x000000000000000000000000000000000BADc0DE'; // known-bad recipient
 
 const UINT256_MAX = (1n << 256n) - 1n;
+
+// Deviation-demo addresses: a clean intent that PASSES the gate, but whose
+// (simulated) executor actually pays a DIFFERENT recipient — caught only by the
+// attestation core, downstream of the gate.
+const INTENDED_VENDOR = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC'; // where the intent says to pay
+const REDIRECT_RECIPIENT = '0x000000000000000000000000000000000BADc0DE'; // where it actually goes
 
 // approve(NONALLOWLISTED_SPENDER, 2^256-1) — the unlimited-approval drainer.
 const DRAINER_APPROVE_CALLDATA =
@@ -149,7 +186,29 @@ export const SAMPLE_INTENTS: OnchainIntent[] = [
     rationale:
       'Check the current USDC balance of our treasury wallet. Read-only query, must not move any funds.',
   },
+
+  // (F) A perfectly clean transfer that PASSES the gate — but whose (simulated)
+  //     executor actually pays a DIFFERENT recipient than intended. The gate
+  //     can't catch this (the intent is honest); the signed ATTESTATION does,
+  //     firing DEVIATION_DETECTED while its signature still verifies. This is
+  //     the attestation core's money shot. Uses a deviating client in runDemo().
+  {
+    id: 'intent-F',
+    action: 'transfer',
+    chain: 'base',
+    to: INTENDED_VENDOR,
+    amount: 100,
+    token: 'USDC',
+    rationale:
+      'Pay 100 USDC to our audited payroll vendor — a routine, expected transfer.',
+  },
 ];
+
+/** Intents whose EXECUTION is fault-injected (deviating client) for the demo. */
+const DEVIATION_CLIENTS: Record<string, string> = {
+  // intent-F "executes" to REDIRECT_RECIPIENT instead of its intended vendor.
+  'intent-F': REDIRECT_RECIPIENT,
+};
 
 /**
  * Run the end-to-end demo:
@@ -160,8 +219,10 @@ export async function runDemo(): Promise<void> {
   console.log('====== Verified Execution Agent (VEA) — DEMO ======');
   console.log('Every intent passes through the verification gate before the last mile.\n');
 
-  // Start each demo run from a clean ledger for readable, self-contained output.
+  // Start each demo run from a clean ledger + attestation log for readable,
+  // self-contained output.
   resetLedger();
+  resetAttestations();
 
   // Offline demo: inject the SIMULATED KeeperHub client so the run needs no
   // network / funded wallet. Production wires the real MCP-backed client via
@@ -169,8 +230,18 @@ export async function runDemo(): Promise<void> {
   const keeperhub = createSimulatedKeeperHubClient();
 
   for (const intent of SAMPLE_INTENTS) {
-    await processIntent(intent, { client: keeperhub });
+    // Most intents run through the honest simulated client. The deviation
+    // scenario (intent-F) runs through a fault-injecting client whose executor
+    // pays a different recipient — so the attestation fires DEVIATION_DETECTED.
+    const redirectTo = DEVIATION_CLIENTS[intent.id];
+    const client = redirectTo ? createDeviatingKeeperHubClient(redirectTo) : keeperhub;
+    await processIntent(intent, { client });
   }
 
   printLedger();
+
+  // The reusable ATTESTATION core: signed intended-vs-actual proofs, one per
+  // intent, each re-verified live. This is the portable artifact — reliable
+  // execution proof / accuracy-oracle verdict / verification receipt in one.
+  printAttestations();
 }

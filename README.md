@@ -93,6 +93,52 @@ decoding is a ~40-line minimal ABI reader for the flat fixed-size types these
 selectors use (`address` = last 20 bytes of a 32-byte word, `uint256` = the word
 as a `BigInt`, `bool` = word `!= 0`). **No external dependency.**
 
+## The reusable core: the Attestation
+
+The gate decides *whether* something should happen. The **attestation core**
+(`src/attestation.ts`) answers a different, complementary question **after the
+fact**: *did what actually executed match what was intended?* It produces a
+**signed artifact** comparing the **intended** action against the **actual**
+execution result — a portable, tamper-evident proof.
+
+Why this matters: a gate can wave through an honest-looking intent, and the
+executor can still do something else — a buggy adapter, a compromised relayer, a
+reordering, a swapped recipient. **An agent that SAYS it did X but actually did
+Y is exactly the failure an attestation catches.** `compareIntendedVsActual()`
+flags recipient deviations, amount deviations, and calldata that decodes to a
+different action than intended.
+
+**One core, three framings.** The same artifact reads as:
+
+| Framing | Reads as | For |
+|---------|----------|-----|
+| **Reliable-execution proof** | "the agent did exactly what it was told" | a keeper / execution platform |
+| **Accuracy-oracle verdict** | "this agent's claimed action matches reality" | an agent society that rates agents |
+| **Verification-service receipt** | "an independent verifier checked this and signed off" | a paid-verification marketplace |
+
+An `Attestation` records `intended`, `actual` (or `null` if blocked), a `match`
+(`{ ok, deviations[] }`), and one of three verdicts:
+
+- `EXECUTED_AS_INTENDED` — actual matched intended;
+- `DEVIATION_DETECTED` — the executor diverged from the intent (deviations listed);
+- `BLOCKED_PRE_EXECUTION` — the gate blocked it; nothing executed (block reasons carried).
+
+**Cryptographic signing, zero dependencies.** Signatures use Node's built-in
+`crypto` with an **Ed25519** keypair. The keypair is generated on first run and
+persisted to `attestor_key.json` (**gitignored — the private key never leaves the
+machine and is never committed**) so the attestor identity is stable. Each
+attestation embeds the attestor **public key** and a signature over the
+attestation's canonical JSON; `verifyAttestation(att)` re-checks it, so any
+tampering with a signed field is detectable.
+
+**Chain-agnostic by construction.** The core depends only on a generic
+`OnchainIntent` and `ExecutionResult` shape — **not** on KeeperHub. The same
+attestation works behind any execution adapter; the `keeperhubAdapter` stays a
+thin adapter that simply reports back what it actually executed.
+
+Attestations are appended to a parallel `attestations.jsonl` (also gitignored,
+regenerated each demo run).
+
 ## Architecture
 
 | File | Responsibility |
@@ -100,9 +146,10 @@ as a `BigInt`, `bool` = word `!= 0`). **No external dependency.**
 | `src/types.ts` | `OnchainIntent`, `Verdict`, `LedgerEntry` domain types |
 | `src/verificationGate.ts` | the four-layer gate — `verifyIntent(intent)` |
 | `src/calldataGuard.ts` | **Calldata Guard** — minimal ABI decoder + threat rules — `analyzeCalldata(intent)` |
+| `src/attestation.ts` | **Attestation core** — signed intended-vs-actual proof — `attestExecution()`, `compareIntendedVsActual()`, `verifyAttestation()` |
 | `src/keeperhubAdapter.ts` | the "last mile" — `executeOnChain(intent)`: **real KeeperHub integration** (`execute_transfer` → poll `get_direct_execution_status`), confirmed on Sepolia |
 | `src/ledger.ts` | append-only JSONL reliability ledger |
-| `src/agent.ts` | the loop: `processIntent()` → verify → execute-or-skip → log; `runDemo()` |
+| `src/agent.ts` | the loop: `processIntent()` → verify → execute-or-skip → log → **attest**; `runDemo()` |
 | `src/demo.ts` | runs the demo with 3 sample intents |
 | `src/buildDashboard.ts` | injects the live ledger into `dashboard.template.html` → `dashboard.html` |
 | `dashboard.template.html` | self-contained dark-theme dashboard (inline CSS/JS, no build, no CDN) |
@@ -185,8 +232,17 @@ You should see:
 - **Intent E** — a contractCall claiming a read-only *"check balance"* whose
   calldata decodes to `transfer(attacker, 1000e6)` → **BLOCK** by the **Calldata
   Guard** as a hidden transfer to a known-bad recipient.
+- **Intent F** — a perfectly clean 100 USDC payroll transfer that **PASSes** the
+  gate, but whose (simulated) executor **actually pays a different recipient**.
+  The gate can't catch this — the intent is honest — but the signed
+  **attestation** fires **`DEVIATION_DETECTED`**, naming the recipient
+  divergence, and its signature **still verifies**. This is the attestation
+  core's money shot: catching an executor that did *Y* after being told *X*.
 
-…followed by a printed reliability ledger summarizing **1 PASS / 4 BLOCK**.
+…followed by a printed reliability ledger, then the **signed attestations** —
+each re-verified live. Intent F always attests **`DEVIATION_DETECTED`**, and the
+gate always blocks B, D, and E; whether C passes or blocks depends on the LLM
+second opinion being reachable (see the honesty note below).
 
 To compile to `dist/` instead: `npm run build && npm run demo:built`.
 

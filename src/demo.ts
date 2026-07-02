@@ -10,6 +10,13 @@
  *       decodes approve(spender, 2^256-1) -> expected BLOCK (Calldata Guard: drainer)
  *   (E) "check balance" but calldata
  *       decodes transfer(attacker, 1000e6)-> expected BLOCK (Calldata Guard: hidden transfer)
+ *   (F) a clean transfer the gate PASSES, but whose executor actually pays a
+ *       DIFFERENT recipient           -> executed, then the signed ATTESTATION
+ *                                         fires DEVIATION_DETECTED (signature
+ *                                         still verifies)
+ *
+ * Every handled intent also emits a signed intended-vs-actual ATTESTATION; the
+ * run ends by printing them and re-verifying each signature.
  *
  * Run with:  npm run demo
  */

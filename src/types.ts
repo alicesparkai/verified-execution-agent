@@ -86,6 +86,19 @@ export interface ExecutionResult {
   gasUsedWei?: string;
   /** Failure reason, when the execution failed or could not be submitted. */
   error?: string;
+
+  // --- What was ACTUALLY executed, as reported back by the adapter / execution
+  //     status. These let the ATTESTATION core compare intended vs actual, so it
+  //     can catch an executor that did Y after being told X. Optional because not
+  //     every adapter reports every field. ---
+  /** The recipient the execution actually paid / called. */
+  to?: string;
+  /** The value/amount actually moved (decimal string, chain-agnostic). */
+  valueOrAmount?: string;
+  /** The calldata actually executed, for contractCall-style actions. */
+  calldata?: string;
+  /** Block number the tx landed in, when the adapter reports it. */
+  blockNumber?: number;
 }
 
 /** One immutable row in the reliability ledger. */
