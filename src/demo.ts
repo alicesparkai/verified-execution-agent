@@ -2,7 +2,8 @@
  * Demo entrypoint.
  *
  * Runs five sample intents through the Verified Execution Agent:
- *   (A) a reasonable transfer            -> expected PASS  (executed, stub txHash)
+ *   (A) a reasonable transfer            -> expected PASS  (executed via the
+ *       simulated KeeperHub client; production uses the real MCP-backed client)
  *   (B) zero-address + absurd amount     -> expected BLOCK (deterministic safety)
  *   (C) action contradicts rationale     -> expected BLOCK (LLM sanity check)
  *   (D) "small DEX approval" but calldata

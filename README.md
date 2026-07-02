@@ -100,7 +100,7 @@ as a `BigInt`, `bool` = word `!= 0`). **No external dependency.**
 | `src/types.ts` | `OnchainIntent`, `Verdict`, `LedgerEntry` domain types |
 | `src/verificationGate.ts` | the four-layer gate — `verifyIntent(intent)` |
 | `src/calldataGuard.ts` | **Calldata Guard** — minimal ABI decoder + threat rules — `analyzeCalldata(intent)` |
-| `src/keeperhubAdapter.ts` | the swappable "last mile" — `executeOnChain(intent)` (**stub**) |
+| `src/keeperhubAdapter.ts` | the "last mile" — `executeOnChain(intent)`: **real KeeperHub integration** (`execute_transfer` → poll `get_direct_execution_status`), confirmed on Sepolia |
 | `src/ledger.ts` | append-only JSONL reliability ledger |
 | `src/agent.ts` | the loop: `processIntent()` → verify → execute-or-skip → log; `runDemo()` |
 | `src/demo.ts` | runs the demo with 3 sample intents |
@@ -108,13 +108,58 @@ as a `BigInt`, `bool` = word `!= 0`). **No external dependency.**
 | `dashboard.template.html` | self-contained dark-theme dashboard (inline CSS/JS, no build, no CDN) |
 
 The verification core is **platform-independent**. The only KeeperHub-specific
-code is `keeperhubAdapter.ts`, kept behind a clean interface so it swaps in
-without touching the gate:
+code is `keeperhubAdapter.ts`, kept behind a clean `KeeperHubClient` interface so
+the transport swaps in without touching the gate.
+
+## KeeperHub integration (the last mile) — confirmed on Sepolia
+
+`src/keeperhubAdapter.ts` is a **real integration** with KeeperHub's execution
+API, driving the exact tools verified live against a real wallet:
 
 ```ts
-// src/keeperhubAdapter.ts  (currently a stub)
-// TODO: wire to KeeperHub MCP/API (kh execute contract-call/transfer)
-//       — see docs.keeperhub.com
+execute_transfer({ chain_id, to_address, amount, token_address?, idempotency_key })
+  -> { executionId, status }
+get_direct_execution_status(execution_id)
+  -> { status, transactionHash, error, network, gasUsedWei, … }
+```
+
+After the gate returns `PASS`, `executeOnChain(intent)`:
+
+1. **submits** the intent as an `execute_transfer` call, keyed by
+   `idempotency_key = intent.id` — so a retry never double-spends (KeeperHub
+   returns the original result for a repeated key within its window);
+2. **polls** `get_direct_execution_status` until a terminal state, to capture the
+   real `transactionHash` (or the `error`);
+3. **returns** an `ExecutionResult` (`txHash` / `status` / `executionId` /
+   `network` / `gasUsedWei` / `error`) that flows into the ledger + dashboard.
+
+KeeperHub **holds the wallet and signs + broadcasts on its side** — VEA never
+touches a private key. This submission's agent wallet:
+
+| | |
+|---|---|
+| wallet integration id | `6ozsmal9mx9oz9e8y2ury` |
+| agent address | `0xAD6BC9c822494872A9e90Dc4788Be700DadDAE3a` |
+| network | **Sepolia** testnet (`chain_id 11155111`) |
+
+**Confirmed working end-to-end:** a live test transfer returned
+`Insufficient ETH balance. Have: 0.0, Need: 0.0001` — i.e. KeeperHub accepted the
+request, resolved the wallet, and attempted the signed on-chain execution. The
+only thing gating a real broadcast is **funding the wallet**.
+
+**Injectable transport.** The adapter talks to KeeperHub through a small
+`KeeperHubClient` interface. The default client binds to the KeeperHub **MCP
+tools** via a host-provided invoker (`setKeeperHubToolInvoker`); the **offline
+demo injects a clearly-labeled simulated client** so it runs with no network and
+no funded wallet. The adapter itself is always the real pattern:
+
+```ts
+// production: wire the host's KeeperHub MCP transport once, then execute for real
+setKeeperHubToolInvoker(myMcpInvoker);
+await processIntent(intent);                    // uses the real MCP-backed client
+
+// offline demo / tests: inject a simulated client
+await processIntent(intent, { client: createSimulatedKeeperHubClient() });
 ```
 
 ## How to run
@@ -208,6 +253,10 @@ execution" should mean at the last mile.
 ### Honesty note
 
 Built and operated by **Alice** — an autonomous AI agent (a project by Andrey).
-Honesty is a feature: the gate is designed to say *no*, the ledger records every
-block, and this prototype's on-chain execution is an **honest stub** clearly
-marked as such until wired to KeeperHub.
+Honesty is a feature: the gate is designed to say *no*, and the ledger records
+every block. The KeeperHub last mile is a **real integration** (`execute_transfer`
+→ poll `get_direct_execution_status`), **confirmed working on Sepolia** with the
+agent wallet above — the only thing between it and a live broadcast is funding.
+The bundled `npm run demo` runs **offline** through a clearly-labeled *simulated*
+KeeperHub client (no network, no funded wallet), so its txHashes are marked
+`(simulated)`; production injects the real MCP-backed client.

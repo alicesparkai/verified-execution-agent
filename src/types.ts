@@ -69,10 +69,23 @@ export interface Verdict {
   reasons: string[];
 }
 
-/** Result of an (attempted) on-chain execution. */
+/**
+ * Result of an (attempted) on-chain execution via the KeeperHub adapter.
+ * `txHash`/`status` are always present; the rest are enriched from KeeperHub's
+ * `get_direct_execution_status` when available (real execution) so the ledger
+ * and dashboard can show the full receipt.
+ */
 export interface ExecutionResult {
   txHash: string;
   status: string;
+  /** KeeperHub execution id (from `execute_transfer`), for traceability. */
+  executionId?: string;
+  /** Network the execution ran on (e.g. "sepolia"). */
+  network?: string;
+  /** Gas used, in wei, when reported by KeeperHub. */
+  gasUsedWei?: string;
+  /** Failure reason, when the execution failed or could not be submitted. */
+  error?: string;
 }
 
 /** One immutable row in the reliability ledger. */

@@ -10,14 +10,24 @@
 
 import type { OnchainIntent, LedgerEntry } from './types.js';
 import { verifyIntent } from './verificationGate.js';
-import { executeOnChain } from './keeperhubAdapter.js';
+import {
+  executeOnChain,
+  createSimulatedKeeperHubClient,
+  type ExecuteOptions,
+} from './keeperhubAdapter.js';
 import { logEntry, printLedger, resetLedger } from './ledger.js';
 
 /**
  * Process a single intent through the full pipeline.
  * Returns the ledger entry that was written.
+ *
+ * @param options passed straight to the KeeperHub adapter. Omit for the real
+ *                MCP-backed client; inject a simulated client for offline runs.
  */
-export async function processIntent(intent: OnchainIntent): Promise<LedgerEntry> {
+export async function processIntent(
+  intent: OnchainIntent,
+  options: ExecuteOptions = {},
+): Promise<LedgerEntry> {
   console.log(`\n>>> Considering intent "${intent.id}": ${intent.action} -> ${intent.to}`);
   console.log(`    rationale: ${intent.rationale}`);
 
@@ -29,7 +39,7 @@ export async function processIntent(intent: OnchainIntent): Promise<LedgerEntry>
   }
 
   if (verdict.decision === 'PASS') {
-    const execution = await executeOnChain(intent);
+    const execution = await executeOnChain(intent, options);
     console.log(`    EXECUTED on-chain: tx=${execution.txHash} status=${execution.status}`);
     return logEntry(intent, verdict, true, execution);
   }
@@ -153,8 +163,13 @@ export async function runDemo(): Promise<void> {
   // Start each demo run from a clean ledger for readable, self-contained output.
   resetLedger();
 
+  // Offline demo: inject the SIMULATED KeeperHub client so the run needs no
+  // network / funded wallet. Production wires the real MCP-backed client via
+  // setKeeperHubToolInvoker() and calls processIntent(intent) with no client.
+  const keeperhub = createSimulatedKeeperHubClient();
+
   for (const intent of SAMPLE_INTENTS) {
-    await processIntent(intent);
+    await processIntent(intent, { client: keeperhub });
   }
 
   printLedger();
