@@ -86,6 +86,7 @@ export interface AttestationMatch {
 }
 
 export type AttestationVerdict =
+  | 'APPROVED_FOR_EXECUTION'   // gate PASS, pre-flight: verifier одобрил, исполнение за вызывающим (non-custodial)
   | 'EXECUTED_AS_INTENDED'
   | 'BLOCKED_PRE_EXECUTION'
   | 'DEVIATION_DETECTED';
@@ -308,10 +309,9 @@ export interface AttestationInput {
  *   • executed, matches  -> EXECUTED_AS_INTENDED
  *   • executed, diverges -> DEVIATION_DETECTED
  */
-export function attestExecution(input: AttestationInput): Attestation {
-  const { intent, gateVerdict, executed, execution } = input;
-
-  const intended: AttestationIntended = {
+/** Build the signed "intended" summary from an intent. Shared by attestExecution and attestVerdict. */
+function intendedFrom(intent: OnchainIntent): AttestationIntended {
+  return {
     chainId: intent.chain,
     action: intent.action,
     to: intent.to,
@@ -319,6 +319,43 @@ export function attestExecution(input: AttestationInput): Attestation {
     ...(intent.token ? { token: intent.token } : {}),
     ...(intent.calldata ? { calldata: intent.calldata } : {}),
   };
+}
+
+/** Sign a body (fills in the Ed25519 signature). Shared helper. */
+function signBody(body: Omit<Attestation, 'signature'>): Attestation {
+  const { privateKey } = loadOrCreateAttestor();
+  const signature = edSign(null, Buffer.from(canonicalBody(body), 'utf8'), privateKey).toString(
+    'base64',
+  );
+  return { ...body, signature };
+}
+
+/**
+ * PRE-FLIGHT receipt on the gate's verdict ALONE — nothing executed yet.
+ * This is the receipt POST /verify returns: PASS → APPROVED_FOR_EXECUTION (caller executes with
+ * its own keys, non-custodial), BLOCK → BLOCKED_PRE_EXECUTION. Signed & tamper-evident like all receipts.
+ */
+export function attestVerdict(intent: OnchainIntent, gateVerdict: Verdict): Attestation {
+  const body: Omit<Attestation, 'signature'> = {
+    intentId: intent.id,
+    intended: intendedFrom(intent),
+    actual: null,
+    match: {
+      ok: gateVerdict.decision === 'PASS',
+      deviations: [...gateVerdict.reasons],
+    },
+    verdict:
+      gateVerdict.decision === 'PASS' ? 'APPROVED_FOR_EXECUTION' : 'BLOCKED_PRE_EXECUTION',
+    timestamp: new Date().toISOString(),
+    attestorPubKey: attestorPublicKey(),
+  };
+  return signBody(body);
+}
+
+export function attestExecution(input: AttestationInput): Attestation {
+  const { intent, gateVerdict, executed, execution } = input;
+
+  const intended: AttestationIntended = intendedFrom(intent);
 
   let actual: AttestationActual | null;
   let match: AttestationMatch;
