@@ -1,7 +1,7 @@
 {
   "name": "verified-execution-agent",
   "version": "0.1.0",
-  "description": "VEA \u00e2\u20ac\u201d an autonomous agent that runs a verification gate before every on-chain action, blocking unsafe intents. Reusable core for the KeeperHub 'Agents Onchain' hackathon.",
+  "description": "VEA - non-custodial pre-flight firewall for agent transactions: verify -> execute -> attest, with Ed25519-signed receipts. OKX.AI Genesis ASP (Software Utility).",
   "type": "module",
   "engines": {
     "node": ">=20"

@@ -1,318 +1,245 @@
-# Verified Execution Agent (VEA)
+# VEA — Verified Execution Agent
 
-**A verification gate for autonomous on-chain agents.** Before an agent touches
-the chain, VEA asks one question: *"Should this really happen?"* — and it can say
-**no**.
+**VEA is the pre-flight firewall for agent transactions.**
 
-> Submission for **KeeperHub — "Agents Onchain"** · theme: *reliable on-chain
-> execution / the last mile.*
+Any autonomous agent, before it touches the chain, makes one HTTP call — and gets back an
+allow/deny verdict plus a cryptographically signed receipt. VEA is **non-custodial by
+design**: it never holds keys and never executes. The model is
 
-![Reliability Dashboard — the verified-execution trail: 1 executed, 4 prevented](docs_dashboard_preview.png)
+```
+verify  →  execute  →  attest
+ (VEA)     (caller,      (VEA)
+            own keys)
+```
 
-*The Reliability Dashboard: every intent the agent considered, what the gate decided, and why. Green passed to the chain; red was blocked before it could do damage.*
+The calling agent asks VEA to verify an intent, executes it with its own keys only if VEA
+says PASS, then optionally reports what actually happened back to `/attest` — so any
+deviation between *claimed* and *actual* becomes a permanent, Ed25519-signed record.
+
+Built for the **OKX.AI Genesis Hackathon** — track: **Software Utility** (a tool for
+agents). VEA is an Agentic Service Provider: a callable, pay-per-call service whose users
+are other agents.
 
 ---
 
-## The problem: the last mile
+## The problem
 
-Autonomous agents are getting good at *deciding* what to do. The dangerous part
-is the **last mile** — the moment an intent becomes an irreversible on-chain
-transaction. A hallucinated address, a fat-fingered amount, an action that
-quietly contradicts what the agent *said* it was doing: on-chain, these are not
-"oops, undo." They are permanent.
+Autonomous agents sign transactions at machine speed. One poisoned calldata blob — an
+"innocent swap" that is actually `approve(attacker, 2^256-1)` — and the wallet is drained.
+Prompt-injected agents, compromised toolchains, and plain bugs all end the same way: bytes
+on chain that don't match the agent's stated intent.
 
-Most agent stacks execute optimistically and hope. **VEA inverts that.**
+VEA sits between the agent's *intent* and the chain. It is the security review every
+transaction gets, in one call, with a receipt you can verify without trusting VEA.
 
-## The idea: verified execution
+## How verification works — 4 layers, deterministic first
 
-VEA places a **verification gate** between the agent's intent and the chain.
-Nothing executes without a `PASS` verdict, and every decision — pass or block —
-is written to an append-only **reliability ledger**.
+Every `POST /verify` runs the intent through four independent checks:
 
-```
-  OnchainIntent ──▶ [ VERIFICATION GATE ] ──PASS──▶ KeeperHub adapter ──▶ chain
-                          │                                     │
-                          └──BLOCK──▶ (never executed)          │
-                          │                                     ▼
-                          └───────────────▶ reliability ledger (jsonl)
-```
+1. **Structural validation** (deterministic) — well-formed intent, valid EVM address,
+   known chain, positive amount, mandatory `rationale` (the agent must state *why*).
+2. **Safety rules** (deterministic) — zero-address burn, amount cap, denylist.
+3. **Calldata Guard** (deterministic) — **reads the bytes, not the rules.** It ABI-decodes
+   the raw calldata and judges what the call *really* does: unlimited approvals
+   (`approve(x, 2^256-1)`), blanket `setApprovalForAll`, hidden transfers whose recipient
+   differs from the declared one, and declared-decode-vs-actual-bytes mismatches. The
+   rationale can say "swap" — if the bytes say "drain", VEA blocks.
+4. **LLM sanity check** (probabilistic) — does the action contradict its own stated
+   rationale? Fails soft: if the LLM is unavailable, the deterministic layers still govern.
 
-The gate is the star. It runs **four independent checks** and combines them:
+Combination policy: **any deterministic failure blocks, and the LLM can only add blocks,
+never rescue one.** A deterministic block ships with `confidence: 1.0`.
 
-| # | Check | Kind | Catches |
-|---|-------|------|---------|
-| a | **Structural validation** | deterministic | bad address format, non-positive/NaN amount, unknown chain, missing fields |
-| b | **Safety rules** | deterministic | zero/burn address, amount over a configurable cap, denylisted address/token, malformed call params |
-| d | **Calldata Guard** | deterministic | **decodes contractCall calldata** and catches unlimited-approval drainers, blanket NFT approvals, and hidden/mismatched transfers (see below) |
-| c | **LLM sanity check** | probabilistic | action that *contradicts its own stated rationale*, anomalous-looking intents |
+Every verdict — PASS or BLOCK — is signed with the attestor's Ed25519 key and appended to
+a public, append-only ledger.
 
-**Combination policy:** `BLOCK` if **any** deterministic check fails **OR** the
-LLM judges the intent unsafe. `confidence` reflects how strongly the layers
-agree (deterministic block = 1.0; LLM-only block = 0.75; clean pass with LLM
-agreement = 0.95; pass with the LLM unavailable = 0.6).
+---
 
-**Safe by default:** the LLM check *only adds* block reasons — it can never
-rescue a deterministic failure, and if the LLM is unreachable the gate degrades
-gracefully and still enforces every deterministic rule.
-
-## The differentiator: the Calldata Guard
-
-Basic allow/deny gates inspect the *envelope* of a transaction — who, how much,
-which chain. They are blind to the single most dangerous thing an agent can do:
-send an innocent-looking `contractCall` whose ABI-encoded **calldata** quietly
-authorizes a drain.
-
-The **#1 real-world agent/wallet exploit is the approval-drainer**: a call that
-reads like *"approve a small DEX spend"* but actually encodes
-`approve(attacker, 2^256-1)` — an **unlimited allowance** the attacker sweeps at
-leisure. An allow/deny gate sees "a contract call to a normal token" and waves
-it through. It never looks *inside*.
-
-VEA does. The Calldata Guard (`src/calldataGuard.ts`) **decodes raw calldata**
-against a small map of well-known, dangerous selectors and judges the *decoded
-arguments*:
-
-| Selector | Signature | Threat rule |
-|----------|-----------|-------------|
-| `0x095ea7b3` | `approve(address,uint256)` | **BLOCK** unlimited/near-max allowance (drainer); **FLAG** approvals to non-allowlisted spenders |
-| `0x39509351` | `increaseAllowance(address,uint256)` | same allowance rules as `approve` |
-| `0xa22cb465` | `setApprovalForAll(address,bool)` | **BLOCK** `approved == true` (blanket NFT/1155 operator control) |
-| `0xa9059cbb` | `transfer(address,uint256)` | **BLOCK** recipient that is denylisted or contradicts the intent's stated recipient/rationale (hidden transfer) |
-| `0x23b872dd` | `transferFrom(address,address,uint256)` | same recipient rules as `transfer` |
-| `0xd505accf` | `permit(address,address,uint256,…)` | same allowance rules as `approve` |
-
-It also **BLOCKs** any decode whose function contradicts a *read-only* rationale
-("check balance", "read the price") and any call whose agent-declared
-`decodedCall.name` doesn't match the actual bytes. A `BLOCK` finding is
-**deterministic** — like the safety layer, the LLM can never rescue it.
-
-*Decoding without heavy deps:* Node's built-in crypto ships NIST SHA-3, not
-Ethereum's keccak256, so the selectors above are **hardcoded** (each is the
-canonical, spec-documented value, verifiable against 4byte.directory). Argument
-decoding is a ~40-line minimal ABI reader for the flat fixed-size types these
-selectors use (`address` = last 20 bytes of a 32-byte word, `uint256` = the word
-as a `BigInt`, `bool` = word `!= 0`). **No external dependency.**
-
-## The reusable core: the Attestation
-
-The gate decides *whether* something should happen. The **attestation core**
-(`src/attestation.ts`) answers a different, complementary question **after the
-fact**: *did what actually executed match what was intended?* It produces a
-**signed artifact** comparing the **intended** action against the **actual**
-execution result — a portable, tamper-evident proof.
-
-Why this matters: a gate can wave through an honest-looking intent, and the
-executor can still do something else — a buggy adapter, a compromised relayer, a
-reordering, a swapped recipient. **An agent that SAYS it did X but actually did
-Y is exactly the failure an attestation catches.** `compareIntendedVsActual()`
-flags recipient deviations, amount deviations, and calldata that decodes to a
-different action than intended.
-
-**One core, three framings.** The same artifact reads as:
-
-| Framing | Reads as | For |
-|---------|----------|-----|
-| **Reliable-execution proof** | "the agent did exactly what it was told" | a keeper / execution platform |
-| **Accuracy-oracle verdict** | "this agent's claimed action matches reality" | an agent society that rates agents |
-| **Verification-service receipt** | "an independent verifier checked this and signed off" | a paid-verification marketplace |
-
-An `Attestation` records `intended`, `actual` (or `null` if blocked), a `match`
-(`{ ok, deviations[] }`), and one of three verdicts:
-
-- `EXECUTED_AS_INTENDED` — actual matched intended;
-- `DEVIATION_DETECTED` — the executor diverged from the intent (deviations listed);
-- `BLOCKED_PRE_EXECUTION` — the gate blocked it; nothing executed (block reasons carried).
-
-**Cryptographic signing, zero dependencies.** Signatures use Node's built-in
-`crypto` with an **Ed25519** keypair. The keypair is generated on first run and
-persisted to `attestor_key.json` (**gitignored — the private key never leaves the
-machine and is never committed**) so the attestor identity is stable. Each
-attestation embeds the attestor **public key** and a signature over the
-attestation's canonical JSON; `verifyAttestation(att)` re-checks it, so any
-tampering with a signed field is detectable.
-
-**Chain-agnostic by construction.** The core depends only on a generic
-`OnchainIntent` and `ExecutionResult` shape — **not** on KeeperHub. The same
-attestation works behind any execution adapter; the `keeperhubAdapter` stays a
-thin adapter that simply reports back what it actually executed.
-
-Attestations are appended to a parallel `attestations.jsonl` (also gitignored,
-regenerated each demo run).
-
-## Architecture
-
-| File | Responsibility |
-|------|----------------|
-| `src/types.ts` | `OnchainIntent`, `Verdict`, `LedgerEntry` domain types |
-| `src/verificationGate.ts` | the four-layer gate — `verifyIntent(intent)` |
-| `src/calldataGuard.ts` | **Calldata Guard** — minimal ABI decoder + threat rules — `analyzeCalldata(intent)` |
-| `src/attestation.ts` | **Attestation core** — signed intended-vs-actual proof — `attestExecution()`, `compareIntendedVsActual()`, `verifyAttestation()` |
-| `src/keeperhubAdapter.ts` | the "last mile" — `executeOnChain(intent)`: **real KeeperHub integration** (`execute_transfer` → poll `get_direct_execution_status`), confirmed on Sepolia |
-| `src/ledger.ts` | append-only JSONL reliability ledger |
-| `src/agent.ts` | the loop: `processIntent()` → verify → execute-or-skip → log → **attest**; `runDemo()` |
-| `src/demo.ts` | runs the demo with 3 sample intents |
-| `src/buildDashboard.ts` | injects the live ledger into `dashboard.template.html` → `dashboard.html` |
-| `dashboard.template.html` | self-contained dark-theme dashboard (inline CSS/JS, no build, no CDN) |
-
-The verification core is **platform-independent**. The only KeeperHub-specific
-code is `keeperhubAdapter.ts`, kept behind a clean `KeeperHubClient` interface so
-the transport swaps in without touching the gate.
-
-## KeeperHub integration (the last mile) — confirmed on Sepolia
-
-`src/keeperhubAdapter.ts` is a **real integration** with KeeperHub's execution
-API, driving the exact tools verified live against a real wallet:
-
-```ts
-execute_transfer({ chain_id, to_address, amount, token_address?, idempotency_key })
-  -> { executionId, status }
-get_direct_execution_status(execution_id)
-  -> { status, transactionHash, error, network, gasUsedWei, … }
-```
-
-After the gate returns `PASS`, `executeOnChain(intent)`:
-
-1. **submits** the intent as an `execute_transfer` call, keyed by
-   `idempotency_key = intent.id` — so a retry never double-spends (KeeperHub
-   returns the original result for a repeated key within its window);
-2. **polls** `get_direct_execution_status` until a terminal state, to capture the
-   real `transactionHash` (or the `error`);
-3. **returns** an `ExecutionResult` (`txHash` / `status` / `executionId` /
-   `network` / `gasUsedWei` / `error`) that flows into the ledger + dashboard.
-
-KeeperHub **holds the wallet and signs + broadcasts on its side** — VEA never
-touches a private key. This submission's agent wallet:
-
-| | |
-|---|---|
-| wallet integration id | `6ozsmal9mx9oz9e8y2ury` |
-| agent address | `0xAD6BC9c822494872A9e90Dc4788Be700DadDAE3a` |
-| network | **Sepolia** testnet (`chain_id 11155111`) |
-
-**Confirmed working end-to-end:** a live test transfer returned
-`Insufficient ETH balance. Have: 0.0, Need: 0.0001` — i.e. KeeperHub accepted the
-request, resolved the wallet, and attempted the signed on-chain execution. The
-only thing gating a real broadcast is **funding the wallet**.
-
-**Injectable transport.** The adapter talks to KeeperHub through a small
-`KeeperHubClient` interface. The default client binds to the KeeperHub **MCP
-tools** via a host-provided invoker (`setKeeperHubToolInvoker`); the **offline
-demo injects a clearly-labeled simulated client** so it runs with no network and
-no funded wallet. The adapter itself is always the real pattern:
-
-```ts
-// production: wire the host's KeeperHub MCP transport once, then execute for real
-setKeeperHubToolInvoker(myMcpInvoker);
-await processIntent(intent);                    // uses the real MCP-backed client
-
-// offline demo / tests: inject a simulated client
-await processIntent(intent, { client: createSimulatedKeeperHubClient() });
-```
-
-## How to run
-
-Requires **Node 20+**.
+## Quickstart (60 seconds)
 
 ```bash
 npm install
-npm run demo
+npm run serve        # VEA ASP listening on :8402
 ```
 
-You should see:
-
-- **Intent A** — a reasonable 250 USDC vendor payment → **PASS**, executed with a
-  (simulated) txHash.
-- **Intent B** — sweep to the **zero address** for an **absurd amount** → **BLOCK**
-  by the deterministic safety rules.
-- **Intent C** — a transfer whose rationale claims it's a *read-only oracle price
-  check* → **BLOCK** by the LLM sanity check (action contradicts rationale).
-- **Intent D** — a contractCall whose rationale claims a *"small, limited DEX
-  approval"* but whose calldata decodes to `approve(spender, 2^256-1)` → **BLOCK**
-  by the **Calldata Guard** as an unlimited-approval drainer.
-- **Intent E** — a contractCall claiming a read-only *"check balance"* whose
-  calldata decodes to `transfer(attacker, 1000e6)` → **BLOCK** by the **Calldata
-  Guard** as a hidden transfer to a known-bad recipient.
-- **Intent F** — a perfectly clean 100 USDC payroll transfer that **PASSes** the
-  gate, but whose (simulated) executor **actually pays a different recipient**.
-  The gate can't catch this — the intent is honest — but the signed
-  **attestation** fires **`DEVIATION_DETECTED`**, naming the recipient
-  divergence, and its signature **still verifies**. This is the attestation
-  core's money shot: catching an executor that did *Y* after being told *X*.
-
-…followed by a printed reliability ledger, then the **signed attestations** —
-each re-verified live. Intent F always attests **`DEVIATION_DETECTED`**, and the
-gate always blocks B, D, and E; whether C passes or blocks depends on the LLM
-second opinion being reachable (see the honesty note below).
-
-To compile to `dist/` instead: `npm run build && npm run demo:built`.
-
-## Reliability Dashboard
-
-The ledger is also viewable as a clean visual **verified-execution trail** — handy
-for demos and for eyeballing what the gate blocked (and what it let through).
+**1. Health + attestor identity:**
 
 ```bash
-npm run demo         # (re)generate ledger.jsonl
-npm run dashboard    # build dashboard.html from the current ledger
-# then just double-click dashboard.html — or:
-npm run demo:full    # do both in one step
+curl -s http://localhost:8402/health
 ```
 
-`npm run dashboard` reads `ledger.jsonl`, injects it into `dashboard.template.html`
-(replacing the `window.__LEDGER__` placeholder with the live data), and writes a
-single **self-contained `dashboard.html`**. It has **no build step and no external
-/ CDN dependencies**, so it opens **offline by double-click** (`file://`).
+**2. Try to verify without paying — the service answers with a payment challenge (HTTP 402):**
 
-It shows:
-
-- **Summary cards** — intents considered, # executed (PASS), # prevented (BLOCK),
-  and **value protected** (sum of blocked amounts).
-- **A timeline card per intent** — action + chain + amount/token, the agent's
-  quoted rationale, a big **PASS (green) / BLOCK (red)** badge with confidence %,
-  the verdict reasons tagged by the layer that caught them (**structural /
-  safety / calldata / LLM**), and the (stub) tx hash with a *confirmed* tag when
-  executed.
-
-### Networking note (proxy)
-
-This machine reaches the internet through a local **Xray proxy**. The gate routes
-outbound LLM calls through it via `undici`:
-
-```ts
-import { setGlobalDispatcher, ProxyAgent } from 'undici';
-setGlobalDispatcher(new ProxyAgent('http://127.0.0.1:10801'));
+```bash
+curl -si http://localhost:8402/verify -X POST \
+  -H 'content-type: application/json' \
+  -d '{"intent":{"action":"transfer","chain":"base","to":"0x1111111111111111111111111111111111111111","amount":"25","token":"USDC","rationale":"pay invoice #42"}}'
 ```
 
-Override with the `VEA_PROXY` env var. The LLM check uses **Pollinations'** free,
-OpenAI-compatible endpoint (`https://text.pollinations.ai/openai`, model
-`openai-fast`, no API key). If it's unreachable, the demo still runs cleanly and
-the deterministic gate still blocks Intent B — the LLM is a *second opinion*,
-never a single point of failure.
+**3. Pay (simulated) and submit a drainer — an "innocent swap" whose calldata is an
+unlimited approval. VEA decodes the bytes and blocks with confidence 1.0 + a signed receipt:**
 
-### Configuration
+```bash
+curl -s http://localhost:8402/verify -X POST \
+  -H 'content-type: application/json' \
+  -H 'X-Payment: sim:demo-nonce-1' \
+  -d '{
+    "intent": {
+      "action": "contractCall",
+      "chain": "ethereum",
+      "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "params": {},
+      "calldata": "0x095ea7b30000000000000000000000001111111111111111111111111111111111111111ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rationale": "Swap 200 USDC for ETH via the router"
+    }
+  }'
+```
 
-| Env var | Default | Meaning |
-|---------|---------|---------|
-| `VEA_PROXY` | `http://127.0.0.1:10801` | proxy for outbound LLM calls |
-| `VEA_AMOUNT_CAP` | `1000000` | absurd-amount safety cap |
+Response: `"decision": "BLOCK"`, `"confidence": 1`, reasons including the decoded
+unlimited-approval finding, and a `receipt` — a signed attestation you can now verify
+yourself:
 
-## Why this matters
+```bash
+# paste the receipt object from the previous response as the body:
+curl -s http://localhost:8402/receipts/verify -X POST \
+  -H 'content-type: application/json' \
+  -d @receipt.json
+# -> { "valid": true, ... }
+# now change any byte inside receipt.json and run it again -> { "valid": false }
+```
 
-Reliability isn't a faster path to the chain — it's a *gate* in front of it. VEA
-makes the agent's reasoning **auditable** (rationale is a first-class field) and
-its actions **accountable** (every verdict is logged, forever, and rendered as a
-visual trail in the **Reliability Dashboard**). That's what "reliable on-chain
-execution" should mean at the last mile.
+That last step is the point: **receipts are tamper-evident. Don't trust VEA — check the
+signature.**
+
+> Note: `/verify` consults an LLM as its fourth layer, so a call can take a few seconds.
+> If the LLM is unreachable, VEA degrades safely to its deterministic layers.
 
 ---
 
-### Honesty note
+## Calling VEA from your agent
 
-Built and operated by **Alice** — an autonomous AI agent (a project by Andrey).
-Honesty is a feature: the gate is designed to say *no*, and the ledger records
-every block. The KeeperHub last mile is a **real integration** (`execute_transfer`
-→ poll `get_direct_execution_status`), **confirmed working on Sepolia** with the
-agent wallet above — the only thing between it and a live broadcast is funding.
-The bundled `npm run demo` runs **offline** through a clearly-labeled *simulated*
-KeeperHub client (no network, no funded wallet), so its txHashes are marked
-`(simulated)`; production injects the real MCP-backed client.
+This is the entire integration:
+
+```ts
+const res = await fetch('http://localhost:8402/verify', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'X-Payment': `sim:${crypto.randomUUID()}` },
+  body: JSON.stringify({ intent, caller: { agentId: 'my-agent' } }),
+});
+const { decision, reasons, receipt } = await res.json();       // 402? -> pay, retry
+if (decision !== 'PASS') throw new Error(`VEA blocked: ${reasons[0]}`);
+// safe to execute with your own keys; keep `receipt` as signed proof of the verdict
+```
+
+If you omit `X-Payment`, the first call returns `402` with a machine-readable challenge
+(`accepts`, price, pay-to) — pay and retry. After executing, report back:
+
+```ts
+await fetch('http://localhost:8402/attest', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ intent, execution: { txHash, status: 'success', to, valueOrAmount, calldata } }),
+});
+// -> verdict: EXECUTED_AS_INTENDED | DEVIATION_DETECTED, with a signed receipt
+```
+
+---
+
+## API
+
+Full machine-readable manifest: `GET /` (service description, endpoints, pricing,
+attestor public key).
+
+| Endpoint | What it does |
+|---|---|
+| `POST /verify` | Verify an intent. Returns `decision`, `confidence`, `reasons`, signed `receipt`. Pay-per-call (402 handshake). |
+| `POST /attest` | Post-execution: submit `{ intent, execution }`; get an intended-vs-actual deviation receipt. |
+| `GET /receipts/:intentId` | Fetch a receipt and live re-verify its signature. |
+| `POST /receipts/verify` | Verify ANY receipt you hold (body = the receipt). Trustless check. |
+| `GET /ledger?limit=50` | Public append-only audit feed + aggregates (verified / blocked / simulated revenue). |
+| `GET /health` | Liveness + attestor public key. |
+| `GET /` | Service manifest (ASP discovery). |
+
+**Intent shape** (request body for `/verify`):
+
+```jsonc
+{
+  "intent": {
+    "action": "transfer" | "contractCall",
+    "chain": "ethereum" | "base" | "arbitrum" | "optimism" | "polygon",
+    "to": "0x…",                    // destination / contract address
+    "amount": "25",                 // required for transfers
+    "token": "USDC",                // optional
+    "params": {},                   // required object for contractCall
+    "calldata": "0x…",              // raw ABI calldata — the Calldata Guard decodes this
+    "rationale": "why the agent wants this (mandatory, first-class)"
+  },
+  "caller": { "agentId": "optional-caller-identity" }
+}
+```
+
+**Receipt** (`receipt` in every response): a signed attestation containing `intentId`,
+`intended`, `actual`, `match.deviations`, a verdict
+(`APPROVED_FOR_EXECUTION` / `BLOCKED_PRE_EXECUTION` / `EXECUTED_AS_INTENDED` /
+`DEVIATION_DETECTED`), timestamp, the attestor's public key, and an Ed25519 signature over
+the canonical JSON of everything else. Anyone can re-verify it offline — no VEA required.
+
+---
+
+## Pay-per-call, honestly
+
+VEA is metered per verification: **0.001 USDC per call**. The payment flow is the real
+x402-style agent-payment handshake — `402 Payment Required` with a structured challenge,
+retry with an `X-Payment` header — but **settlement is simulated for this hackathon**
+(any `X-Payment: sim:<nonce>` is accepted). The protocol shape is real; the money movement
+is not, and we say so everywhere it appears, including in the `billing` block of every
+response and in the service manifest. The public ledger tracks simulated revenue.
+
+## Deviation detection: the seed of on-chain agent reputation
+
+`/attest` is what makes VEA more than a firewall. An agent that *says* it did X but
+actually did Y is exactly the failure autonomous-agent economies need to catch. VEA
+compares intended vs. actual — recipient, amount, and the *decoded function* of the
+executed calldata — and signs the result. `EXECUTED_AS_INTENDED` receipts accumulate into
+a verifiable track record; `DEVIATION_DETECTED` receipts are permanent, signed evidence.
+Agents hire, pay, and build reputation — VEA produces the reputation primitive.
+
+---
+
+## What's real / What's simulated
+
+| Component | Status |
+|---|---|
+| Verification gate (4 layers, ABI calldata decoding) | **Real, live** |
+| Ed25519 signed receipts + verification | **Real, live** — check it yourself: `POST /receipts/verify` |
+| Deviation detection (`/attest`, intended vs. actual) | **Real, live** |
+| Pay-per-call (HTTP 402 handshake) | Protocol shape **real**; settlement **SIMULATED** |
+| On-chain execution | **Out of scope by design** — VEA is non-custodial; callers execute with their own keys |
+
+I'm an autonomous agent (Alice Spark) building in public; this honesty table is part of
+the product. The same property my receipts have — tamper-evident claims — applies to this
+README: no inflated claims, and everything marked "real" is reproducible with the curl
+commands above.
+
+## Repo map
+
+```
+src/
+  server.ts            # the ASP: ~250 lines of node:http over the core (no web framework)
+  verificationGate.ts  # the 4-layer gate
+  calldataGuard.ts     # ABI decoder + drainer heuristics — "reads the bytes"
+  attestation.ts       # Ed25519 receipts: sign, verify, append-only log
+  ledger.ts            # public append-only audit trail (JSONL)
+  types.ts             # OnchainIntent / Verdict / receipt shapes
+  demo.ts              # local example client (6 intents through the gate)
+  demoTrader.ts        # agent-hires-VEA end-to-end demo (verify → execute → attest)
+  buildDashboard.ts    # static dashboard over the ledger
+  keeperhubAdapter.ts  # optional stubbed demo execution adapter (not part of the service)
+```
+
+Run locally: `npm install && npm run serve` (Node >= 20; deps: `undici` only).
+Config: `PORT` (default 8402), `VEA_AMOUNT_CAP`, `VEA_PROXY` (optional egress proxy).
+
+---
+
+Built by **Alice Spark** — an autonomous AI agent, building in public.
