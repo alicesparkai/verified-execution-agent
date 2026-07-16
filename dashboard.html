@@ -191,7 +191,7 @@
 
   <footer>
     Generated from <b>ledger.jsonl</b> · confidence = how strongly the gate's layers agree ·
-    on-chain execution is an honest stub until wired to KeeperHub.
+    on-chain execution is out of scope by design — VEA is non-custodial (callers execute with their own keys).
   </footer>
 </div>
 
@@ -200,7 +200,7 @@
   // Falls back to an empty trail if opened as a raw template.
   window.__LEDGER__ = [
   {
-    "timestamp": "2026-07-02T07:47:16.115Z",
+    "timestamp": "2026-07-16T17:50:41.644Z",
     "intent": {
       "id": "intent-A",
       "action": "transfer",
@@ -212,9 +212,9 @@
     },
     "verdict": {
       "decision": "PASS",
-      "confidence": 0.95,
+      "confidence": 0.6,
       "reasons": [
-        "LLM: action is consistent with rationale — The transfer of 250 USDC to the specified vendor address aligns with the stated monthly invoice payment rationale and does not raise any anomalous or dangerous indicators."
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
       ]
     },
     "executed": true,
@@ -223,11 +223,13 @@
       "status": "confirmed (simulated)",
       "executionId": "sim-intent-A",
       "network": "sepolia (simulated)",
-      "gasUsedWei": "0"
+      "gasUsedWei": "0",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "valueOrAmount": "250"
     }
   },
   {
-    "timestamp": "2026-07-02T07:47:16.955Z",
+    "timestamp": "2026-07-16T17:50:47.660Z",
     "intent": {
       "id": "intent-B",
       "action": "transfer",
@@ -243,13 +245,13 @@
       "reasons": [
         "Safety: destination is the zero address (funds would be burned).",
         "Safety: amount 999999999 exceeds cap 1000000 (possible fat-finger or exploit).",
-        "LLM: flagged as unsafe/anomalous — The action transfers USDC to the zero address, which burns the tokens, not to a cold-storage account. This contradicts the rationale and is a dangerous, anomalous operation."
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
       ]
     },
     "executed": false
   },
   {
-    "timestamp": "2026-07-02T07:47:17.475Z",
+    "timestamp": "2026-07-16T17:50:53.712Z",
     "intent": {
       "id": "intent-C",
       "action": "transfer",
@@ -260,16 +262,25 @@
       "rationale": "Read the current ETH/USD price from the Chainlink oracle. This is a read-only price check and must not move any funds."
     },
     "verdict": {
-      "decision": "BLOCK",
-      "confidence": 0.75,
+      "decision": "PASS",
+      "confidence": 0.6,
       "reasons": [
-        "LLM: flagged as unsafe/anomalous — The action transfers 5,000 USDC to an address, but the rationale claims only a read-only price check with no fund movement. The intent is inconsistent and potentially malicious."
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
       ]
     },
-    "executed": false
+    "executed": true,
+    "execution": {
+      "txHash": "0xbbe54d88bbe54d88bbe54d88bbe54d88bbe54d88bbe54d88bbe54d88bbe54d88",
+      "status": "confirmed (simulated)",
+      "executionId": "sim-intent-C",
+      "network": "sepolia (simulated)",
+      "gasUsedWei": "0",
+      "to": "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B",
+      "valueOrAmount": "5000"
+    }
   },
   {
-    "timestamp": "2026-07-02T07:47:18.181Z",
+    "timestamp": "2026-07-16T17:50:59.722Z",
     "intent": {
       "id": "intent-D",
       "action": "contractCall",
@@ -288,13 +299,13 @@
       "confidence": 1,
       "reasons": [
         "Calldata: [BLOCK] unlimited-approval drainer: approve(0xdef1…5eff, 2^256-1 (uint256 max)) grants an effectively-unlimited approve allowance — the #1 real-world wallet-drain pattern. This directly contradicts the stated \"small/limited spend\" rationale.",
-        "LLM: flagged as unsafe/anomalous — The proposed contractCall lacks required approve parameters (spender address and amount) and the target address (0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913) is not a known DEX router on Base, making the intent ambiguous and potentially malicious. The action does not clearly match the rationale of granting a small, limited allowance for a modest swap."
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
       ]
     },
     "executed": false
   },
   {
-    "timestamp": "2026-07-02T07:47:41.755Z",
+    "timestamp": "2026-07-16T17:51:05.733Z",
     "intent": {
       "id": "intent-E",
       "action": "contractCall",
@@ -314,7 +325,314 @@
       "reasons": [
         "Calldata: [BLOCK] hidden state-changing call: rationale claims a read-only/balance check, but calldata invokes transfer(address,uint256) — which moves funds or grants permissions.",
         "Calldata: [BLOCK] transfer() sends funds to known-bad recipient 0x0000…c0de.",
-        "LLM: unavailable (deterministic checks still enforced) — LLM returned unparseable output"
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-16T17:51:11.784Z",
+    "intent": {
+      "id": "intent-F",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "amount": 100,
+      "token": "USDC",
+      "rationale": "Pay 100 USDC to our audited payroll vendor — a routine, expected transfer."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": true,
+    "execution": {
+      "txHash": "0x1602c73d1602c73d1602c73d1602c73d1602c73d1602c73d1602c73d1602c73d",
+      "status": "confirmed (simulated)",
+      "executionId": "sim-deviating-intent-F",
+      "network": "sepolia (simulated)",
+      "gasUsedWei": "0",
+      "to": "0x000000000000000000000000000000000BADc0DE",
+      "valueOrAmount": "100"
+    }
+  },
+  {
+    "timestamp": "2026-07-16T17:54:35.112Z",
+    "intent": {
+      "id": "drain-1",
+      "action": "contractCall",
+      "chain": "base",
+      "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "calldata": "0x095ea7b3000000000000000000000000def1c0ded9bec7f1a1670819833240f027b25effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rationale": "Approve router for a small 200 USDC swap"
+    },
+    "verdict": {
+      "decision": "BLOCK",
+      "confidence": 1,
+      "reasons": [
+        "Safety: contractCall has no params object.",
+        "Calldata: [BLOCK] unlimited-approval drainer: approve(0xdef1…5eff, 2^256-1 (uint256 max)) grants an effectively-unlimited approve allowance — the #1 real-world wallet-drain pattern. This directly contradicts the stated \"small/limited spend\" rationale.",
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-16T17:58:16.271Z",
+    "intent": {
+      "id": "trade-1-payroll",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 250,
+      "token": "USDC",
+      "rationale": "Pay the monthly infra invoice of 250 USDC to our verified vendor wallet."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-16T17:58:22.292Z",
+    "intent": {
+      "id": "trade-1-payroll",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 250,
+      "token": "USDC",
+      "rationale": "Pay the monthly infra invoice of 250 USDC to our verified vendor wallet."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": true,
+    "execution": {
+      "txHash": "0xf4f10424380befbd9d0481ee2576dc1b20a418ea9fa8d167a48b7b80808e9720",
+      "status": "confirmed",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "valueOrAmount": "250",
+      "blockNumber": 21000001
+    }
+  },
+  {
+    "timestamp": "2026-07-16T17:58:28.317Z",
+    "intent": {
+      "id": "trade-2-swap",
+      "action": "contractCall",
+      "chain": "base",
+      "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "token": "USDC",
+      "params": {
+        "function": "approve",
+        "note": "grant DEX a small spend allowance for the swap"
+      },
+      "calldata": "0x095ea7b3000000000000000000000000def1c0ded9bec7f1a1670819833240f027b25effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rationale": "Approve a small 200 USDC spend so the DEX router can execute a modest swap on our behalf."
+    },
+    "verdict": {
+      "decision": "BLOCK",
+      "confidence": 1,
+      "reasons": [
+        "Calldata: [BLOCK] unlimited-approval drainer: approve(0xdef1…5eff, 2^256-1 (uint256 max)) grants an effectively-unlimited approve allowance — the #1 real-world wallet-drain pattern. This directly contradicts the stated \"small/limited spend\" rationale.",
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-16T17:58:34.338Z",
+    "intent": {
+      "id": "trade-3-vendor",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 100,
+      "token": "USDC",
+      "rationale": "Pay 100 USDC to our audited payroll vendor — a routine, expected transfer."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-16T17:58:40.354Z",
+    "intent": {
+      "id": "trade-3-vendor",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 100,
+      "token": "USDC",
+      "rationale": "Pay 100 USDC to our audited payroll vendor — a routine, expected transfer."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": true,
+    "execution": {
+      "txHash": "0xf1cebdd5a9e5a00eeb09021c94b80e6a1b16e17028a2f2196ba2437bce8a86d0",
+      "status": "confirmed",
+      "to": "0x000000000000000000000000000000000BADc0DE",
+      "valueOrAmount": "100",
+      "blockNumber": 21000002
+    }
+  },
+  {
+    "timestamp": "2026-07-16T18:00:22.898Z",
+    "intent": {
+      "id": "trade-1-payroll",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 250,
+      "token": "USDC",
+      "rationale": "Pay the monthly infra invoice of 250 USDC to our verified vendor wallet."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-16T18:00:28.925Z",
+    "intent": {
+      "id": "trade-1-payroll",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 250,
+      "token": "USDC",
+      "rationale": "Pay the monthly infra invoice of 250 USDC to our verified vendor wallet."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": true,
+    "execution": {
+      "txHash": "0xb9154826bc24e75ddd89290bba9ccae849c99b415f300f3299604b53b24a7e35",
+      "status": "confirmed",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "valueOrAmount": "250",
+      "blockNumber": 21000001
+    }
+  },
+  {
+    "timestamp": "2026-07-16T18:00:34.950Z",
+    "intent": {
+      "id": "trade-2-swap",
+      "action": "contractCall",
+      "chain": "base",
+      "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "token": "USDC",
+      "params": {
+        "function": "approve",
+        "note": "grant DEX a small spend allowance for the swap"
+      },
+      "calldata": "0x095ea7b3000000000000000000000000def1c0ded9bec7f1a1670819833240f027b25effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "rationale": "Approve a small 200 USDC spend so the DEX router can execute a modest swap on our behalf."
+    },
+    "verdict": {
+      "decision": "BLOCK",
+      "confidence": 1,
+      "reasons": [
+        "Calldata: [BLOCK] unlimited-approval drainer: approve(0xdef1…5eff, 2^256-1 (uint256 max)) grants an effectively-unlimited approve allowance — the #1 real-world wallet-drain pattern. This directly contradicts the stated \"small/limited spend\" rationale.",
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-16T18:00:40.973Z",
+    "intent": {
+      "id": "trade-3-vendor",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 100,
+      "token": "USDC",
+      "rationale": "Pay 100 USDC to our audited payroll vendor — a routine, expected transfer."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": false
+  },
+  {
+    "timestamp": "2026-07-16T18:00:46.990Z",
+    "intent": {
+      "id": "trade-3-vendor",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x52908400098527886E0F7030069857D2E4169EE7",
+      "amount": 100,
+      "token": "USDC",
+      "rationale": "Pay 100 USDC to our audited payroll vendor — a routine, expected transfer."
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.6,
+      "reasons": [
+        "LLM: unavailable (deterministic checks still enforced) — LLM unavailable: fetch failed"
+      ]
+    },
+    "executed": true,
+    "execution": {
+      "txHash": "0xc6e244d47e27555b3cba36f9e7eb7dc7766ec44535241ea680facd73c57c0905",
+      "status": "confirmed",
+      "to": "0x000000000000000000000000000000000BADc0DE",
+      "valueOrAmount": "100",
+      "blockNumber": 21000002
+    }
+  },
+  {
+    "timestamp": "2026-07-16T18:07:55.307Z",
+    "intent": {
+      "id": "vea-8f50e6b9-65a3-44ed-ab74-1517ba036c0d",
+      "action": "transfer",
+      "chain": "base",
+      "to": "0x1111111111111111111111111111111111111111",
+      "amount": "25",
+      "rationale": "test"
+    },
+    "verdict": {
+      "decision": "PASS",
+      "confidence": 0.95,
+      "reasons": [
+        "LLM: action is consistent with rationale — The transfer action is consistent with the vague 'test' rationale and targets a known test address; no malicious or anomalous behavior detected."
       ]
     },
     "executed": false

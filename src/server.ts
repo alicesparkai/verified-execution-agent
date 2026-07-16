@@ -77,8 +77,21 @@ function readBody(req: IncomingMessage): Promise<string> {
  */
 function checkPayment(req: IncomingMessage): { ok: true; ref: string } | { ok: false; challenge: unknown } {
   const pay = req.headers['x-payment'];
-  if (typeof pay === 'string' && pay.length > 0) {
+  // Three-state protocol (real x402 shape): valid proof → charge; malformed proof → reject;
+  // no proof → challenge. Only settlement is simulated — the handshake states are real.
+  if (typeof pay === 'string' && /^sim:[\w-]{4,}$/.test(pay)) {
     return { ok: true, ref: pay };
+  }
+  if (typeof pay === 'string' && pay.length > 0) {
+    return {
+      ok: false,
+      challenge: {
+        error: 'invalid payment proof',
+        status: 402,
+        reason: 'malformed X-Payment (expected  sim:<nonce>  where nonce is 4+ [A-Za-z0-9_-])',
+        accepts: [{ scheme: 'x402-sim', ...PRICE, payTo: 'vea-treasury.sim' }],
+      },
+    };
   }
   return {
     ok: false,
@@ -86,7 +99,7 @@ function checkPayment(req: IncomingMessage): { ok: true; ref: string } | { ok: f
       error: 'payment required',
       status: 402,
       accepts: [{ scheme: 'x402-sim', ...PRICE, payTo: 'vea-treasury.sim' }],
-      how: 'retry with header  X-Payment: sim:<any-nonce>  (settlement simulated for the hackathon)',
+      how: 'retry with header  X-Payment: sim:<nonce>  (settlement simulated for the hackathon)',
     },
   };
 }
