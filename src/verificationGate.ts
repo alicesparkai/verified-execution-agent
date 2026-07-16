@@ -25,11 +25,16 @@ import { analyzeCalldata } from './calldataGuard.js';
 // Network setup: this machine reaches the internet via a local Xray proxy.
 // Route all undici (global fetch) traffic through it.
 // ---------------------------------------------------------------------------
-const PROXY_URL = process.env.VEA_PROXY ?? 'http://127.0.0.1:10801';
-try {
-  setGlobalDispatcher(new ProxyAgent(PROXY_URL));
-} catch {
-  // If the proxy can't be set up, the LLM check will simply fail-soft later.
+// Route undici (global fetch) через прокси ТОЛЬКО если VEA_PROXY задан ЯВНО. На деплой-хосте
+// без локального Xray безусловный прокси молча убивал бы LLM-проверку (confidence=0.6, «LLM
+// unavailable» в каждом ответе). Пусто/не задан → прямой интернет (норма для сервера/облака).
+const PROXY_URL = process.env.VEA_PROXY;
+if (PROXY_URL) {
+  try {
+    setGlobalDispatcher(new ProxyAgent(PROXY_URL));
+  } catch {
+    // If the proxy can't be set up, the LLM check will simply fail-soft later.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -214,13 +219,16 @@ async function llmSanityCheck(intent: OnchainIntent): Promise<LlmResult> {
 
   // Pollinations' free tier rate-limits bursts (HTTP 429). Retry a few times
   // with backoff so a transient limit doesn't silently disable the check.
-  const MAX_ATTEMPTS = 4;
+  // ENV-tunable: серверный режим ставит VEA_LLM_ATTEMPTS=2 / VEA_LLM_TIMEOUT_MS=8000, чтобы
+  // /verify отвечал <10s всегда (деградация к детерминированным проверкам за секунды, а не ~2 мин).
+  const MAX_ATTEMPTS = Number(process.env.VEA_LLM_ATTEMPTS ?? 4);
+  const LLM_TIMEOUT_MS = Number(process.env.VEA_LLM_TIMEOUT_MS ?? 30_000);
   let lastReason = 'LLM unavailable';
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30_000);
+      const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
 
       const res = await fetch(LLM_URL, {
         method: 'POST',
