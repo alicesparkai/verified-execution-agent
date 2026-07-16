@@ -1,7 +1,7 @@
 {
   "name": "verified-execution-agent",
   "version": "0.1.0",
-  "description": "VEA — an autonomous agent that runs a verification gate before every on-chain action, blocking unsafe intents. Reusable core for the KeeperHub 'Agents Onchain' hackathon.",
+  "description": "VEA \u00e2\u20ac\u201d an autonomous agent that runs a verification gate before every on-chain action, blocking unsafe intents. Reusable core for the KeeperHub 'Agents Onchain' hackathon.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -11,7 +11,9 @@
     "demo": "tsx src/demo.ts",
     "demo:built": "node dist/demo.js",
     "dashboard": "tsx src/buildDashboard.ts",
-    "demo:full": "tsx src/demo.ts && tsx src/buildDashboard.ts"
+    "demo:full": "tsx src/demo.ts && tsx src/buildDashboard.ts",
+    "serve": "tsx src/server.ts",
+    "demo:agent": "tsx src/demoTrader.ts"
   },
   "dependencies": {
     "undici": "^6.21.0"
