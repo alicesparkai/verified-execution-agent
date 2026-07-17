@@ -1,0 +1,18 @@
+# Never bake these into the image.
+node_modules
+dist
+.git
+.gitignore
+
+# SECRET: the attestor private key. In production it is supplied via the
+# VEA_ATTESTOR_KEY env var, never copied into the image.
+attestor_key.json
+
+# Local runtime state / demo artifacts — regenerated at runtime, not needed in the image.
+attestations.jsonl
+ledger.jsonl
+dashboard.html
+video
+*.log
+_smoke_receipt*.json
+npm-debug.log*

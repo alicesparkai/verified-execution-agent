@@ -167,6 +167,20 @@ let cached: Attestor | undefined;
 function loadOrCreateAttestor(): Attestor {
   if (cached) return cached;
 
+  // 1. Env var (production / deploy): the attestor identity MUST stay stable across
+  //    redeploys, or previously-issued receipts stop verifying. Hosts like Railway /
+  //    Render / Fly have ephemeral filesystems, so the on-disk key file is wiped on
+  //    every restart. Set `VEA_ATTESTOR_KEY` to the JSON contents of attestor_key.json
+  //    (a secret — it holds the private key) to pin the identity. Env wins over file.
+  const fromEnv = process.env.VEA_ATTESTOR_KEY;
+  if (fromEnv && fromEnv.trim()) {
+    const parsed = JSON.parse(fromEnv) as AttestorKeyFile;
+    const privateKey = createPrivateKey(parsed.privateKeyPem);
+    const publicKey = createPublicKey(parsed.publicKeyPem);
+    cached = { privateKey, publicKey, pubKeyB64: publicKeyToB64(publicKey) };
+    return cached;
+  }
+
   if (existsSync(ATTESTOR_KEY_PATH)) {
     const parsed = JSON.parse(readFileSync(ATTESTOR_KEY_PATH, 'utf8')) as AttestorKeyFile;
     const privateKey = createPrivateKey(parsed.privateKeyPem);
