@@ -83,6 +83,37 @@ const PRICE = {
  * It is emitted base64-encoded in the PAYMENT-REQUIRED header AND in the body, so both
  * v2 (header) and body-reading clients can obtain the payment requirements.
  */
+/**
+ * How to call the paid resource AFTER paying. Declared inside every accepts[] entry so a
+ * paying client never has to guess the verb or the body shape.
+ * Shape follows the Bazaar/x402 `outputSchema.input` convention: type/method/bodyType/body.
+ */
+const PAID_CALL_SCHEMA = {
+  input: {
+    type: 'http',
+    method: 'POST',
+    bodyType: 'json',
+    body: {
+      type: 'object',
+      required: ['intent'],
+      properties: {
+        intent: {
+          type: 'object',
+          description: 'The on-chain intent to verify before execution.',
+          properties: {
+            action: { type: 'string', description: 'e.g. transfer | approve | contractCall' },
+            to: { type: 'string', description: '0x-address of the target' },
+            value: { type: 'string', description: 'amount in base units' },
+            data: { type: 'string', description: 'optional calldata (0x…) — decoded and screened' },
+            chainId: { type: 'number', description: 'optional EVM chain id' },
+          },
+        },
+        rationale: { type: 'string', description: "optional: the agent's stated reason — checked for contradiction" },
+      },
+    },
+  },
+};
+
 function x402Challenge() {
   return {
     x402Version: X402.version,
@@ -90,7 +121,9 @@ function x402Challenge() {
     accepts: [
       // Hedera testnet first: the only rail here where settlement is REAL and the
       // receipt is anchored to a public consensus log. The EVM entries below follow.
-      hederaAccept(),
+      // outputSchema attached here too: a validator that reads only accepts[0] must still
+      // learn the verb + body shape of the paid call.
+      { ...hederaAccept(), outputSchema: PAID_CALL_SCHEMA },
       ...X402_ASSETS.map((a) => ({
       scheme: 'exact',
       network: X402.network,
@@ -100,6 +133,9 @@ function x402Challenge() {
       maxTimeoutSeconds: X402.maxTimeoutSeconds,
       description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
       mimeType: 'application/json',
+      // Tell the payer HOW to replay after paying. Client CLIs (incl. OKX) probe with GET
+      // by default; without this they cannot know the paid call is POST+JSON. (25.07.)
+      outputSchema: PAID_CALL_SCHEMA,
       extra: { name: a.name, version: a.version, decimals: a.decimals },
       })),
     ],
@@ -305,6 +341,23 @@ const server = createServer(async (req, res) => {
         entries: all.slice(-limit),
       });
     }
+    // x402 DISCOVERY — a paid resource must answer an UNPAID request with the 402 challenge
+    // for ANY method, not just the one it happens to be called with.
+    // Why this exists (OKX listing rejection, 25.07): validators probe the paid endpoint with
+    // GET by default. /verify used to live only inside the POST block, so a GET fell through
+    // to the generic 404 — the checker saw "unknown endpoint" instead of a payment challenge
+    // and concluded the service does not implement x402 at all. The 402 was real, just
+    // unreachable by the method they probe with.
+    if (req.method === 'GET' && (path === '/verify' || path === '/attest')) {
+      const pay = await checkPayment(req);
+      if (!pay.ok) return send(402, pay.challenge);
+      // Paid, but the verb is wrong: point at the documented call instead of failing blind.
+      return send(405, {
+        error: 'payment accepted, but this resource is called with POST',
+        howToCall: PAID_CALL_SCHEMA.input,
+      });
+    }
+
     if (req.method === 'GET' && path.startsWith('/receipts/')) {
       const id = decodeURIComponent(path.split('/')[2] ?? '');
       const att = readAttestations().find((a) => a.intentId === id);

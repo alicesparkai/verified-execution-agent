@@ -11,3 +11,4 @@ attestations.jsonl
 # Hedera rail: operator key stays local. Topic id / spent-payment state is machine-local too.
 .env
 .hedera-state.json
+*.mp4
