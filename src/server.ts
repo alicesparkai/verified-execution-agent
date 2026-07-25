@@ -36,20 +36,37 @@ const PORT = Number(process.env.PORT ?? 8402);
 const X402 = {
   version: 2,
   network: 'eip155:196',                                          // CAIP-2: X Layer mainnet
-  asset: '0x74b7F16337b8972027F6196A17a631aC6dE26d22',            // USDC on X Layer
-  assetName: 'USD Coin',
-  assetVersion: '2',                                              // EIP-712 domain version (EIP-3009)
-  decimals: 6,
-  amount: '1000',                                                 // atomic units = 0.001 USDC
+  amount: '1000',                                                 // atomic units, 6 decimals = 0.001
   payTo: process.env.VEA_PAY_TO ?? '0xda9fa90cd39039af4a854e0bd7e3510e6a3ac960',
   maxTimeoutSeconds: 60,
   resource: process.env.VEA_RESOURCE ?? 'https://verified-execution-agent.onrender.com/verify',
 };
 
+/**
+ * Accepted payment assets on X Layer, in preference order.
+ *
+ * USD₮0 is FIRST because it is the exact contract the OKX.AI listing registers for this
+ * service (its `contractAddress`, displayed as "0.001 USDT") — a challenge advertising a
+ * different token than the listing would be a real mismatch for a paying caller.
+ *
+ * Every field below is VERIFIED, not assumed:
+ *  - addresses + decimals from OKX's own token list (okx/xlayer-tokenlist, chainId 196);
+ *  - EIP-3009 support probed on-chain (`authorizationState` responds on both tokens);
+ *  - the EIP-712 `extra.name` / `extra.version` pairs were confirmed by recomputing
+ *    DOMAIN_SEPARATOR and matching the value each contract returns on X Layer.
+ *    USD₮0 → ("USD₮0", "1");  USDC → ("USD Coin", "2").
+ * A wrong domain pair still *looks* fine in the JSON but makes every signature invalid,
+ * so it is checked rather than guessed.
+ */
+const X402_ASSETS = [
+  { address: '0x779Ded0c9e1022225f8E0630b35a9b54bE713736', name: 'USD₮0', version: '1', decimals: 6 },
+  { address: '0x74b7F16337b8972027F6196A17a631aC6dE26d22', name: 'USD Coin', version: '2', decimals: 6 },
+];
+
 const PRICE = {
   model: 'per-call' as const,
-  price: '0.001 USDC',
-  asset: 'USDC',
+  price: '0.001 USDT',
+  asset: 'USD₮0 (preferred) or USDC',
   network: 'X Layer (eip155:196)',
   settlement: 'on-chain (x402 exact / EIP-3009)' as const,
   note: 'x402 challenge is emitted per spec in the PAYMENT-REQUIRED header (base64 JSON).',
@@ -65,19 +82,17 @@ function x402Challenge() {
   return {
     x402Version: X402.version,
     resource: X402.resource,
-    accepts: [
-      {
-        scheme: 'exact',
-        network: X402.network,
-        asset: X402.asset,
-        amount: X402.amount,
-        payTo: X402.payTo,
-        maxTimeoutSeconds: X402.maxTimeoutSeconds,
-        description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
-        mimeType: 'application/json',
-        extra: { name: X402.assetName, version: X402.assetVersion, decimals: X402.decimals },
-      },
-    ],
+    accepts: X402_ASSETS.map((a) => ({
+      scheme: 'exact',
+      network: X402.network,
+      asset: a.address,
+      amount: X402.amount,
+      payTo: X402.payTo,
+      maxTimeoutSeconds: X402.maxTimeoutSeconds,
+      description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
+      mimeType: 'application/json',
+      extra: { name: a.name, version: a.version, decimals: a.decimals },
+    })),
   };
 }
 
