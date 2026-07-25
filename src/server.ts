@@ -14,6 +14,10 @@
  */
 import { createServer, IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { readFileSync, existsSync } from 'node:fs';
+import { loadEnv } from './loadEnv.js';
+
+loadEnv();
 import { verifyIntent } from './verificationGate.js';
 import {
   attestVerdict,
@@ -25,6 +29,7 @@ import {
 } from './attestation.js';
 import { logEntry, readLedger } from './ledger.js';
 import type { OnchainIntent, Verdict } from './types.js';
+import { hederaAccept, verifyHederaPayment, anchorReceipt, HEDERA, type PaymentCheck } from './hederaRail.js';
 
 const PORT = Number(process.env.PORT ?? 8402);
 
@@ -82,7 +87,11 @@ function x402Challenge() {
   return {
     x402Version: X402.version,
     resource: X402.resource,
-    accepts: X402_ASSETS.map((a) => ({
+    accepts: [
+      // Hedera testnet first: the only rail here where settlement is REAL and the
+      // receipt is anchored to a public consensus log. The EVM entries below follow.
+      hederaAccept(),
+      ...X402_ASSETS.map((a) => ({
       scheme: 'exact',
       network: X402.network,
       asset: a.address,
@@ -92,7 +101,8 @@ function x402Challenge() {
       description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
       mimeType: 'application/json',
       extra: { name: a.name, version: a.version, decimals: a.decimals },
-    })),
+      })),
+    ],
   };
 }
 
@@ -118,7 +128,8 @@ const MANIFEST = {
   attestorPubKey: attestorPublicKey(),
   honesty: {
     real: ['4-layer verification gate', 'ABI calldata decoding', 'Ed25519 signed receipts', 'deviation detection'],
-    simulated: ['payment settlement (402 handshake shape is real)'],
+    real2: ['Hedera rail: REAL settlement verified against the Mirror Node + receipts anchored to HCS'],
+    simulated: ['payment settlement on the EVM rails only (the 402 handshake shape is real there)'],
     outOfScope: ['on-chain execution — VEA is non-custodial by design'],
   },
 };
@@ -140,10 +151,31 @@ function readBody(req: IncomingMessage): Promise<string> {
  * retries with proof). Any `X-Payment: sim:<nonce>` is accepted (settlement simulated).
  * The shape is the real x402 agent-payment handshake; only settlement is stubbed — stated plainly.
  */
-function checkPayment(req: IncomingMessage): { ok: true; ref: string } | { ok: false; challenge: unknown } {
+async function checkPayment(
+  req: IncomingMessage,
+): Promise<{ ok: true; ref: string; settled?: PaymentCheck } | { ok: false; challenge: unknown }> {
   const pay = req.headers['x-payment'];
+
+  // ── Hedera rail: REAL settlement. The header carries a Hedera transaction id; we ask the
+  // Mirror Node whether that transfer actually happened, credited us, is recent and unused.
+  // Nothing here is stubbed — an unpaid caller cannot talk their way past this branch.
+  if (typeof pay === 'string' && /^(hedera:)?\d+\.\d+\.\d+[@-]\d+[.-]\d+$/.test(pay)) {
+    const settled = await verifyHederaPayment(pay.replace(/^hedera:/, ''));
+    if (settled.ok) return { ok: true, ref: `hedera:${settled.txId}`, settled };
+    return {
+      ok: false,
+      challenge: {
+        error: 'payment not accepted',
+        status: 402,
+        reason: settled.reason,
+        checkedAgainst: `${HEDERA.mirror}/api/v1/transactions/…`,
+        accepts: [hederaAccept()],
+      },
+    };
+  }
+
   // Three-state protocol (real x402 shape): valid proof → charge; malformed proof → reject;
-  // no proof → challenge. Only settlement is simulated — the handshake states are real.
+  // no proof → challenge. On the non-Hedera rails settlement is still simulated — stated plainly.
   if (typeof pay === 'string' && /^sim:[\w-]{4,}$/.test(pay)) {
     return { ok: true, ref: pay };
   }
@@ -153,8 +185,10 @@ function checkPayment(req: IncomingMessage): { ok: true; ref: string } | { ok: f
       challenge: {
         error: 'invalid payment proof',
         status: 402,
-        reason: 'malformed X-Payment (expected  sim:<nonce>  where nonce is 4+ [A-Za-z0-9_-])',
-        accepts: [{ scheme: 'x402-sim', ...PRICE, payTo: 'vea-treasury.sim' }],
+        reason:
+          'malformed X-Payment — expected a Hedera transaction id (0.0.x@sec.nanos) for real settlement, ' +
+          'or sim:<nonce> on the simulated rails',
+        accepts: [hederaAccept()],
       },
     };
   }
@@ -169,7 +203,7 @@ function checkPayment(req: IncomingMessage): { ok: true; ref: string } | { ok: f
   };
 }
 
-async function handleVerify(body: any, payRef: string) {
+async function handleVerify(body: any, payRef: string, settled?: PaymentCheck) {
   if (!body || typeof body.intent !== 'object') {
     throw new Error('missing "intent" object');
   }
@@ -177,6 +211,35 @@ async function handleVerify(body: any, payRef: string) {
   const verdict: Verdict = await verifyIntent(intent); // core, unchanged
   const receipt = logAttestation(attestVerdict(intent, verdict));
   logEntry(intent, verdict, false);
+
+  // Paid on Hedera → anchor the receipt to the public HCS topic. The caller gets back a
+  // consensus timestamp and sequence number they can check on HashScan without us: proof
+  // that this verdict existed BEFORE they acted. Anchoring must never break the response,
+  // so a network hiccup degrades to "not anchored" rather than failing a paid call.
+  let anchor: Awaited<ReturnType<typeof anchorReceipt>> | undefined;
+  let payment: Record<string, unknown> | undefined;
+  if (settled?.ok) {
+    payment = {
+      txId: settled.txId,
+      amountTinybars: settled.amountTinybars,
+      consensusAt: settled.consensusAt,
+      explorer: settled.explorer,
+    };
+    try {
+      anchor = await anchorReceipt({
+        v: 1,
+        intentId: intent.id,
+        decision: verdict.decision,
+        intentHash: (receipt as any).intentHash ?? (receipt as any).payloadHash,
+        attestorPubKey: attestorPublicKey(),
+        signature: (receipt as any).signature,
+        paidWith: settled.txId,
+      });
+    } catch (e) {
+      anchor = undefined;
+    }
+  }
+
   return {
     intentId: intent.id,
     decision: verdict.decision,
@@ -188,6 +251,7 @@ async function handleVerify(body: any, payRef: string) {
       attestorPubKey: attestorPublicKey(),
     },
     billing: { ...PRICE, charged: true, paymentRef: payRef },
+    ...(anchor ? { hedera: { payment, anchor } } : {}),
   };
 }
 
@@ -259,9 +323,9 @@ const server = createServer(async (req, res) => {
         return send(400, { error: 'invalid JSON body' });
       }
       if (path === '/verify') {
-        const pay = checkPayment(req);
+        const pay = await checkPayment(req);
         if (!pay.ok) return send(402, pay.challenge);
-        return send(200, await handleVerify(body, pay.ref));
+        return send(200, await handleVerify(body, pay.ref, (pay as any).settled));
       }
       if (path === '/attest') return send(200, await handleAttest(body));
       if (path === '/receipts/verify') {

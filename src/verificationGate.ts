@@ -41,13 +41,29 @@ if (PROXY_URL) {
 // Configuration (tunable safety policy)
 // ---------------------------------------------------------------------------
 
-/** Chains the agent is allowed to operate on. */
+/**
+ * Chains the agent is allowed to operate on.
+ *
+ * Both spellings are accepted on purpose: the bare name an operator types ("hedera") and
+ * the CAIP-2 identifier a machine caller sends ("hedera:testnet", "eip155:296"). A gate
+ * that understands only one of them blocks correct traffic for a formatting reason, and a
+ * verdict of BLOCK for the wrong reason is worse than useless — it teaches the caller to
+ * ignore the gate.
+ */
 const KNOWN_CHAINS = new Set([
   'ethereum',
   'base',
   'arbitrum',
   'optimism',
   'polygon',
+  // Hedera — the rail where this service settles for real (see hederaRail.ts).
+  'hedera',
+  'hedera:testnet',
+  'hedera:mainnet',
+  'eip155:296', // Hedera testnet, EVM view
+  'eip155:295', // Hedera mainnet, EVM view
+  'xlayer',
+  'eip155:196', // X Layer, where the OKX.AI listing settles
 ]);
 
 /** Absurdly-large-amount cap. Anything above this is auto-blocked. */

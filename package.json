@@ -13,9 +13,12 @@
     "dashboard": "tsx src/buildDashboard.ts",
     "demo:full": "tsx src/demo.ts && tsx src/buildDashboard.ts",
     "serve": "tsx src/server.ts",
-    "demo:agent": "tsx src/demoTrader.ts"
+    "demo:agent": "tsx src/demoTrader.ts",
+    "hedera:setup": "tsx src/hederaSetup.ts",
+    "hedera:demo": "tsx src/hederaDemo.ts"
   },
   "dependencies": {
+    "@hashgraph/sdk": "^2.81.0",
     "undici": "^6.21.0"
   },
   "devDependencies": {

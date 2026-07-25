@@ -186,12 +186,68 @@ the canonical JSON of everything else. Anyone can re-verify it offline — no VE
 
 ---
 
+## Hedera rail — real settlement, and receipts anchored to consensus
+
+Everywhere else in this repo, payment settlement is honestly labelled *simulated*. On the
+Hedera rail it is not: the caller makes a **real HBAR transfer on Hedera testnet**, the
+server verifies it against the **Mirror Node** before serving anything, and the resulting
+receipt is published to a **Hedera Consensus Service topic**.
+
+```bash
+cp .env.example .env      # fill in a testnet account from portal.hedera.com
+npm run hedera:setup      # creates the HCS receipt topic
+npm run hedera:demo       # unpaid 402 -> real payment -> verdict -> anchor -> replay refused
+```
+
+**Why Hedera and not just one more entry in `accepts[]`.** VEA sells a pre-flight verdict on
+an irreversible action. Signing the receipt was never the hard part — proving afterwards
+that the verdict existed *before* the action, and that nobody rewrote it, is. That is an
+ordering-and-timestamp problem, and HCS is a primitive built exactly for it: an append-only
+topic where every message carries a consensus timestamp and a sequence number, at a fixed
+$0.0001. The verdict stops being something you take on our word.
+
+**What the demo proves, in order:**
+
+| Step | Artefact |
+|---|---|
+| 1. Unpaid call | `402` + x402 challenge in the `PAYMENT-REQUIRED` header (base64 JSON, 3 rails) |
+| 2. Payment | A real testnet transfer from a **separate client-agent account** to the service |
+| 3. Paid call | Mirror-Node-verified payment → verdict → receipt anchored to HCS |
+| 4. Round trip | The anchored receipt is read **back** from the Mirror Node — confirmed from outside our process |
+| 5. Replay | The same payment presented twice is **refused** |
+
+Steps 4 and 5 are the point. Anyone can print "payment accepted"; what matters is that an
+outside observer can confirm it and that a reused proof fails.
+
+**On the `scheme` field.** x402's canonical `exact` settles via EIP-3009, where the payer
+signs and a facilitator submits. Hedera's native rail has no EIP-3009 — the payer submits
+the transfer and presents the transaction id. The guarantee for the resource server is the
+same (exact amount, verifiable, non-repudiable); the mechanics differ, so `extra.settlement`
+says `native-transfer` rather than pretending the mechanism is identical.
+
+**Two Hedera-specific things worth knowing**, both learned the hard way here:
+
+- *Consensus finality is not Mirror Node availability.* A transfer reaches consensus in
+  ~3 seconds, but the Mirror Node answers `404` for a few seconds more while it indexes.
+  A single immediate lookup rejects payments that genuinely happened — the caller pays and
+  still gets a `402`. So `404` is treated as "not yet", with a short bounded wait; every
+  other failure is decided immediately.
+- *Payment verification must read the credit line, not the net.* `transfers[]` includes
+  every party to the transaction — node fees, service fees, the payer's debit. Only the
+  positive amount credited to the service account counts.
+
+Verify any of it yourself at [hashscan.io/testnet](https://hashscan.io/testnet) — the topic,
+the payments, the anchored receipts. None of it needs this server to be running.
+
+---
+
 ## Pay-per-call, honestly
 
 VEA is metered per verification: **0.001 USDC per call**. The payment flow is the real
 x402-style agent-payment handshake — `402 Payment Required` with a structured challenge,
-retry with an `X-Payment` header — but **settlement is simulated for this hackathon**
-(any `X-Payment: sim:<nonce>` is accepted). The protocol shape is real; the money movement
+retry with an `X-Payment` header. On the **Hedera rail settlement is real** (see above);
+on the EVM rails it is still simulated for the hackathon (any `X-Payment: sim:<nonce>` is
+accepted there). The protocol shape is real; the money movement
 is not, and we say so everywhere it appears, including in the `billing` block of every
 response and in the service manifest. The public ledger tracks simulated revenue.
 
@@ -210,6 +266,8 @@ Agents hire, pay, and build reputation — VEA produces the reputation primitive
 
 | Component | Status |
 |---|---|
+| Hedera rail: HBAR settlement verified via Mirror Node | **Real, live on testnet** |
+| Hedera rail: receipts anchored to HCS (consensus timestamp + sequence) | **Real, live on testnet** |
 | Verification gate (4 layers, ABI calldata decoding) | **Real, live** |
 | Ed25519 signed receipts + verification | **Real, live** — check it yourself: `POST /receipts/verify` |
 | Deviation detection (`/attest`, intended vs. actual) | **Real, live** |
