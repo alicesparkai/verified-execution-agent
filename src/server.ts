@@ -27,13 +27,63 @@ import { logEntry, readLedger } from './ledger.js';
 import type { OnchainIntent, Verdict } from './types.js';
 
 const PORT = Number(process.env.PORT ?? 8402);
+
+/**
+ * x402 payment terms — REAL chain/token/recipient (X Layer mainnet).
+ * Values verified against OKX's own token list (okx/xlayer-tokenlist, chainId 196),
+ * not copied second-hand: USDC 0x74b7…6d22, 6 decimals.
+ */
+const X402 = {
+  version: 2,
+  network: 'eip155:196',                                          // CAIP-2: X Layer mainnet
+  asset: '0x74b7F16337b8972027F6196A17a631aC6dE26d22',            // USDC on X Layer
+  assetName: 'USD Coin',
+  assetVersion: '2',                                              // EIP-712 domain version (EIP-3009)
+  decimals: 6,
+  amount: '1000',                                                 // atomic units = 0.001 USDC
+  payTo: process.env.VEA_PAY_TO ?? '0xda9fa90cd39039af4a854e0bd7e3510e6a3ac960',
+  maxTimeoutSeconds: 60,
+  resource: process.env.VEA_RESOURCE ?? 'https://verified-execution-agent.onrender.com/verify',
+};
+
 const PRICE = {
   model: 'per-call' as const,
   price: '0.001 USDC',
   asset: 'USDC',
-  settlement: 'SIMULATED' as const,
-  note: 'x402-style handshake; settlement is simulated for the hackathon.',
+  network: 'X Layer (eip155:196)',
+  settlement: 'on-chain (x402 exact / EIP-3009)' as const,
+  note: 'x402 challenge is emitted per spec in the PAYMENT-REQUIRED header (base64 JSON).',
 };
+
+/**
+ * Build the x402 challenge exactly as the spec (and OKX listing review) requires:
+ *   {x402Version, resource, accepts:[{scheme, network, asset, amount, payTo, maxTimeoutSeconds, extra}]}
+ * It is emitted base64-encoded in the PAYMENT-REQUIRED header AND in the body, so both
+ * v2 (header) and body-reading clients can obtain the payment requirements.
+ */
+function x402Challenge() {
+  return {
+    x402Version: X402.version,
+    resource: X402.resource,
+    accepts: [
+      {
+        scheme: 'exact',
+        network: X402.network,
+        asset: X402.asset,
+        amount: X402.amount,
+        payTo: X402.payTo,
+        maxTimeoutSeconds: X402.maxTimeoutSeconds,
+        description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
+        mimeType: 'application/json',
+        extra: { name: X402.assetName, version: X402.assetVersion, decimals: X402.decimals },
+      },
+    ],
+  };
+}
+
+function challengeHeader() {
+  return Buffer.from(JSON.stringify(x402Challenge()), 'utf8').toString('base64');
+}
 
 const MANIFEST = {
   service: 'VEA — Verified Execution Agent',
@@ -98,8 +148,8 @@ function checkPayment(req: IncomingMessage): { ok: true; ref: string } | { ok: f
     challenge: {
       error: 'payment required',
       status: 402,
-      accepts: [{ scheme: 'x402-sim', ...PRICE, payTo: 'vea-treasury.sim' }],
-      how: 'retry with header  X-Payment: sim:<nonce>  (settlement simulated for the hackathon)',
+      ...x402Challenge(),
+      how: 'Read the PAYMENT-REQUIRED header (base64 JSON) or the accepts[] above, pay per x402, retry with X-PAYMENT.',
     },
   };
 }
@@ -148,7 +198,11 @@ async function handleAttest(body: any) {
 const server = createServer(async (req, res) => {
   const send = (code: number, obj: unknown) => {
     const payload = JSON.stringify(obj, null, 2);
-    res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' });
+    const headers: Record<string, string> = { 'content-type': 'application/json; charset=utf-8' };
+    // x402: a 402 MUST carry the challenge in the PAYMENT-REQUIRED header (base64 JSON),
+    // otherwise the caller cannot learn asset / amount / payTo. (OKX listing review, 25.07.)
+    if (code === 402) headers['PAYMENT-REQUIRED'] = challengeHeader();
+    res.writeHead(code, headers);
     res.end(payload);
   };
   try {
