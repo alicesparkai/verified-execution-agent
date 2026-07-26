@@ -26,6 +26,8 @@ import { toFacilitatorEvmSigner } from '@okxweb3/x402-evm';
 import { createWalletClient, http, publicActions } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base, xLayer } from 'viem/chains';
+import { makeAgenticSigner } from './agenticSigner.js';
+import { enqueueBroadcast } from './broadcastQueue.js';
 
 /**
  * СЕТИ, КОТОРЫЕ УМЕЕТ ЭТОТ ФАСИЛИТАТОР.
@@ -107,20 +109,47 @@ export class LocalFacilitatorClient {
  * и лучше упасть на старте, чем молча отдавать 402, который невозможно закрыть (fail-loud).
  */
 export function makeLocalFacilitatorClient(): LocalFacilitatorClient {
+  // ── ВЕТКА X LAYER: вещает агентский кошелёк OKX, газ платит их бандлер ──────
+  // Своего ключа тут нет и не нужно: на 196 нативный OKB недоступен ни одним мостом,
+  // зато агентский кошелёк — ERC-4337 smart account со спонсором (доказано цепочкой
+  // 26.07: tx 0xb11dcaace0…c587a прошла при НУЛЕВОМ балансе). Подменяется ровно точка
+  // вещания, платёжный тракт SDK не тронут.
+  const agentic = process.env.VEA_AGENTIC_WALLET as `0x${string}` | undefined;
+  if (NETWORK === 'eip155:196') {
+    if (!agentic || !/^0x[0-9a-fA-F]{40}$/.test(agentic)) {
+      throw new Error(
+        'VEA_AGENTIC_WALLET не задан (адрес агентского кошелька OKX, 0x + 40 hex). ' +
+          'На X Layer расчёт вещает он — своего ключа с газом там нет и быть не может.',
+      );
+    }
+    const signer = makeAgenticSigner({ address: agentic, broadcast: enqueueBroadcast });
+    const facilitator = new x402Facilitator().register(NETWORK, new ExactEvmFacilitator(signer as any));
+    return new LocalFacilitatorClient(facilitator);
+  }
+
+  // ── ВЕТКА BASE (и прочие EOA-сети): подписываем своим ключом ────────────────
   const pk = process.env.VEA_RELAYER_KEY as `0x${string}` | undefined;
   if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) {
     throw new Error(
       'VEA_RELAYER_KEY не задан (нужен приватный ключ ретранслятора, 0x + 64 hex). ' +
-        'Без него фасилитатор не сможет просадить расчёт на X Layer.',
+        `Без него фасилитатор не сможет просадить расчёт в сети ${NETWORK}.`,
     );
   }
-  const signer = buildSigner(pk, process.env.VEA_XLAYER_RPC);
+  const signer = buildSigner(pk, process.env.VEA_BASE_RPC);
   const facilitator = new x402Facilitator().register(NETWORK, new ExactEvmFacilitator(signer));
   return new LocalFacilitatorClient(facilitator);
 }
 
-/** Адрес ретранслятора — для /health, чтобы видеть ФАКТОМ, чем подписываем. */
+/**
+ * Адрес вещателя — для /health, чтобы видеть ФАКТОМ, кто отправляет расчёт.
+ * На X Layer это агентский кошелёк (газ спонсирует бандлер OKX), в остальных сетях — мой EOA.
+ * Показывать ключевой адрес там, где вещает кошелёк, значило бы врать в собственной диагностике.
+ */
 export function relayerAddress(): string | null {
+  if (NETWORK === 'eip155:196') {
+    const a = process.env.VEA_AGENTIC_WALLET;
+    return a && /^0x[0-9a-fA-F]{40}$/.test(a) ? `${a} (агентский кошелёк OKX, газ спонсирован)` : null;
+  }
   const pk = process.env.VEA_RELAYER_KEY as `0x${string}` | undefined;
   if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) return null;
   return privateKeyToAccount(pk).address;

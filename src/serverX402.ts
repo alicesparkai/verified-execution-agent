@@ -26,6 +26,7 @@ import { x402ResourceServer } from '@okxweb3/x402-core/server';
 import { ExactEvmScheme } from '@okxweb3/x402-evm/exact/server';
 import { makeLocalFacilitatorClient, relayerAddress, NETWORK } from './x402/localFacilitator.js';
 import { bridgeBscToBase, fundBuyer } from './x402/bridge.js';
+import { claimJob, submitResult, queueSecretOk, queueStats } from './x402/broadcastQueue.js';
 
 import { verifyIntent, probeLlm } from './verificationGate.js';
 import { attestVerdict, verifyAttestation, readAttestations, logAttestation, attestorPublicKey } from './attestation.js';
@@ -247,6 +248,25 @@ app.get('/receipts/:id', (req, res) => {
 
 app.post('/receipts/verify', (req, res) => {
   res.json({ valid: verifyAttestation(req.body), attestorPubKey: attestorPublicKey() });
+});
+
+// ── ОЧЕРЕДЬ ВЕЩАНИЯ (X Layer): сервис кладёт вызов, машина с кошельком забирает ──
+// Направление обратное не от удобства, а от реальности: у машины нет публичного адреса,
+// и открывать его я не буду. Инициатива у той стороны, которая достижима.
+// Оба маршрута закрыты общим секретом; без VEA_QUEUE_SECRET очередь закрыта наглухо,
+// а не открыта всем — отказ по умолчанию, а не доступ по умолчанию.
+app.post('/internal/broadcast/claim', (req, res) => {
+  if (!queueSecretOk(req.headers['x-queue-secret'])) return res.status(401).json({ error: 'нет доступа к очереди' });
+  const job = claimJob();
+  res.json(job ? { job } : { job: null });
+});
+
+app.post('/internal/broadcast/result', (req, res) => {
+  if (!queueSecretOk(req.headers['x-queue-secret'])) return res.status(401).json({ error: 'нет доступа к очереди' });
+  const { id, txHash, error } = req.body ?? {};
+  if (!id) return res.status(400).json({ error: 'нет id задания' });
+  const ok = submitResult(String(id), txHash, error);
+  res.json({ accepted: ok, ...(ok ? {} : { note: 'задание неизвестно или уже закрыто по таймауту' }) });
 });
 
 app.listen(PORT, () => {
