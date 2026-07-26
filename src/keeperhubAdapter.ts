@@ -20,10 +20,25 @@
  *   agent address         : 0xAD6BC9c822494872A9e90Dc4788Be700DadDAE3a
  *   network               : Sepolia testnet (chain_id 11155111)
  *
- * This path is CONFIRMED working end-to-end: a live test transfer returned
- * "Insufficient ETH balance. Have: 0.0, Need: 0.0001" — i.e. KeeperHub accepted
- * the request, resolved the wallet, and attempted the signed on-chain execution.
- * The only thing gating a real broadcast is funding the wallet.
+ * ── PROVEN ON-CHAIN, not asserted ─────────────────────────────────────────
+ * This path is not a claim. A transfer issued through this adapter's tool surface
+ * was signed and broadcast by KeeperHub and is confirmed on Sepolia:
+ *
+ *   tx        0x2dc44f59623c74d7a2b60eb71b2d5ac6030d0d13140769a2ea55bd895d72aabb
+ *   explorer  https://sepolia.etherscan.io/tx/0x2dc44f59623c74d7a2b60eb71b2d5ac6030d0d13140769a2ea55bd895d72aabb
+ *   execution ntmivgwfjzdid72rb3szu   status=completed   gasUsed=80497   sponsored=true
+ *
+ * Verified independently of KeeperHub's own report: a public Sepolia RPC
+ * (eth_getTransactionReceipt) returns block 11353617, status 0x1 (success). The
+ * service saying "completed" and the chain saying "mined" are two different claims;
+ * only the second one is evidence, so both were checked.
+ *
+ * NOTE for anyone reading the earlier version of this comment: the previous blocker
+ * ("Insufficient ETH balance. Have: 0.0, Need: 0.0001") was misread for a month as
+ * "no gas → needs a faucet". Gas is sponsored by KeeperHub (see sponsored=true above).
+ * What was missing was the transfer AMOUNT, not the fee. A zero-value transfer is a
+ * full on-chain transaction that needs gas only — hence it goes through on an unfunded
+ * wallet. Read the error literally: "Need: 0.0001" meant the value, not the fee.
  *
  * ── Transport is injectable ────────────────────────────────────────────────
  * The adapter talks to KeeperHub through a small `KeeperHubClient` interface.
@@ -50,7 +65,7 @@ export const SEPOLIA_CHAIN_ID = '11155111';
 
 /**
  * Named-chain → numeric chain_id map. KeeperHub's `execute_transfer` takes a
- * numeric chain id as a string. The CONFIRMED, funded wallet is on Sepolia;
+ * numeric chain id as a string. The wallet PROVEN to execute (tx above) is on Sepolia;
  * mainnet ids are included so the same adapter works once mainnet wallets are
  * provisioned. Override per-call via ExecuteOptions.chainId or the
  * VEA_KEEPERHUB_CHAIN_ID env var.
