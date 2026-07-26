@@ -25,7 +25,7 @@ import { paymentMiddleware } from '@okxweb3/x402-express';
 import { x402ResourceServer } from '@okxweb3/x402-core/server';
 import { ExactEvmScheme } from '@okxweb3/x402-evm/exact/server';
 import { makeLocalFacilitatorClient, relayerAddress, NETWORK } from './x402/localFacilitator.js';
-import { bridgeBscToBase } from './x402/bridge.js';
+import { bridgeBscToBase, fundBuyer } from './x402/bridge.js';
 
 import { verifyIntent } from './verificationGate.js';
 import { attestVerdict, verifyAttestation, readAttestations, logAttestation, attestorPublicKey } from './attestation.js';
@@ -212,5 +212,15 @@ app.listen(PORT, () => {
     bridgeBscToBase(true)
       .then((r) => console.log('[мост] итог: ' + JSON.stringify(r)))
       .catch((e) => console.error('[мост] ОШИБКА: ' + (e instanceof Error ? e.message : e)));
+  }
+
+  // ── ВЫДАЧА КОШЕЛЬКУ-ИСПЫТАТЕЛЮ (VEA_FUND_BUYER=0x…) ───────────────────────
+  // Нужна, чтобы прогнать НАСТОЯЩИЙ платёж по ноге приёма — она дважды роняла листинг.
+  // Порог внутри не даёт перезапускам превратиться в раздачу денег.
+  const buyer = process.env.VEA_FUND_BUYER;
+  if (buyer && /^0x[0-9a-fA-F]{40}$/.test(buyer)) {
+    fundBuyer(buyer as `0x${string}`)
+      .then((r) => console.log('[выдача] итог: ' + JSON.stringify(r)))
+      .catch((e) => console.error('[выдача] ОШИБКА: ' + (e instanceof Error ? e.message : e)));
   }
 });

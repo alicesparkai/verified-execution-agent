@@ -51,6 +51,45 @@ async function quote(user: string, amountWei: bigint) {
 }
 
 /**
+ * Выдать покупателю-испытателю немного ETH на Base.
+ *
+ * ЗАЧЕМ: ногу ПРИЁМА платежа нельзя считать рабочей, пока по ней реально не заплатили —
+ * ровно на этом дважды свалился листинг («приглашение ≠ приём»). Чтобы прогнать настоящий
+ * платёж их же покупательским инструментом, кошельку-покупателю нужны средства.
+ * Подписать выдачу может только процесс с ключом ретранслятора, то есть этот.
+ *
+ * ИДЕМПОТЕНТНО ПО ПОРОГУ: если у получателя уже есть больше порога — не шлём ничего.
+ * Перезапуск сервиса (Render свободного тарифа усыпляет и будит) не превращается в раздачу денег.
+ */
+export async function fundBuyer(to: `0x${string}`, log: (s: string) => void = console.log) {
+  const pk = process.env.VEA_RELAYER_KEY as `0x${string}` | undefined;
+  if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) throw new Error('VEA_RELAYER_KEY не задан');
+  const account = privateKeyToAccount(pk);
+  const client = createWalletClient({
+    account,
+    chain: base,
+    transport: http(process.env.VEA_BASE_RPC || 'https://mainnet.base.org'),
+  }).extend(publicActions);
+
+  const amount = BigInt(process.env.VEA_FUND_WEI || '1200000000000000'); // 0.0012 ETH
+  const have = await client.getBalance({ address: to });
+  if (have >= amount / 2n) {
+    log(`[выдача] у ${to} уже ${formatEther(have)} ETH — ничего не шлю (порог пройден)`);
+    return { status: 'skipped', have: formatEther(have) };
+  }
+  const mine = await client.getBalance({ address: account.address });
+  if (mine <= amount * 2n) {
+    log(`[выдача] у ретранслятора всего ${formatEther(mine)} ETH — не отдаю последнее, газ важнее`);
+    return { status: 'refused', mine: formatEther(mine) };
+  }
+  const hash = await client.sendTransaction({ to, value: amount });
+  log(`[выдача] ${formatEther(amount)} ETH → ${to}  tx ${hash}`);
+  const rec = await client.waitForTransactionReceipt({ hash });
+  log(`[выдача] статус: ${rec.status}`);
+  return { status: rec.status, hash };
+}
+
+/**
  * Перевести весь свободный BNB ретранслятора на Base.
  * @param execute false = сухой прогон (ничего не отправляется).
  * @param log куда писать ход (по умолчанию console.log) — чтобы виднелось в логах Render.
