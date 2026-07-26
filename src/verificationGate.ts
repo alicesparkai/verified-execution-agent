@@ -56,6 +56,12 @@ const KNOWN_CHAINS = new Set([
   'arbitrum',
   'optimism',
   'polygon',
+  // Sepolia — the chain the KeeperHub execution path actually runs on
+  // (see keeperhubAdapter.ts; proven by tx 0x2dc44f59…aabb). The gate must know
+  // the chain it executes on: otherwise every real execution is refused as
+  // "unknown chain" — which is exactly what the first end-to-end run hit.
+  'sepolia',
+  'eip155:11155111',
   // Hedera — the rail where this service settles for real (see hederaRail.ts).
   'hedera',
   'hedera:testnet',

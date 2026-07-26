@@ -25,10 +25,43 @@ import { ExactEvmScheme as ExactEvmFacilitator } from '@okxweb3/x402-evm/exact/f
 import { toFacilitatorEvmSigner } from '@okxweb3/x402-evm';
 import { createWalletClient, http, publicActions } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { xLayer } from 'viem/chains';
+import { base, xLayer } from 'viem/chains';
 
-/** CAIP-2 сети X Layer — та же, что стоит в challenge нашего 402. */
-export const NETWORK = 'eip155:196' as const;
+/**
+ * СЕТИ, КОТОРЫЕ УМЕЕТ ЭТОТ ФАСИЛИТАТОР.
+ *
+ * ПОЧЕМУ СЕТЬ СТАЛА ПЕРЕМЕННОЙ (26.07, поворот):
+ *   Я час искала мост в X Layer и упёрлась: Gas.zip — «Insufficient Liquidity» на любую сумму,
+ *   relay.link не знает сеть 196 вовсе, и даже СОБСТВЕННЫЙ агрегатор OKX (`onchainos cross-chain`)
+ *   отвечает `no_path`. X Layer оказался островом: газ туда не завезти.
+ *   Ошибка была в рамке — я держала сеть за ДАННОСТЬ и искала обход. А переменной была именно сеть:
+ *   grep по установленному пакету @okxweb3/x402-* показал, что их SDK поддерживает и "eip155:8453"
+ *   (Base), не только "eip155:196". Base — не остров: relay.link даёт BSC→Base за ~2 секунды.
+ *   Дешевле сменить требование, чем ломиться в остров.
+ *
+ * Выбор сети — через VEA_NETWORK. По умолчанию Base: это единственная сеть из поддержанных SDK,
+ * куда я РЕАЛЬНО могу завезти газ (проверено котировкой, а не списком сетей).
+ */
+const CHAINS = {
+  'eip155:196': { chain: xLayer, rpc: 'https://rpc.xlayer.tech', rpcEnv: 'VEA_XLAYER_RPC' },
+  'eip155:8453': { chain: base, rpc: 'https://mainnet.base.org', rpcEnv: 'VEA_BASE_RPC' },
+} as const;
+
+export type SupportedNetwork = keyof typeof CHAINS;
+
+function pickNetwork(): SupportedNetwork {
+  const n = (process.env.VEA_NETWORK ?? 'eip155:8453') as SupportedNetwork;
+  if (!(n in CHAINS)) {
+    throw new Error(
+      `VEA_NETWORK=${n} не поддержан. Доступны: ${Object.keys(CHAINS).join(', ')}. ` +
+        'Рекламировать сеть, которую не умею просадить, нельзя — это обещание без покрытия.',
+    );
+  }
+  return n;
+}
+
+/** CAIP-2 сети расчёта — ровно та, что стоит в challenge нашего 402. */
+export const NETWORK: SupportedNetwork = pickNetwork();
 
 /**
  * Собрать подписанта фасилитатора из приватного ключа ретранслятора.
@@ -36,10 +69,11 @@ export const NETWORK = 'eip155:196' as const;
  */
 function buildSigner(privateKey: `0x${string}`, rpcUrl?: string) {
   const account = privateKeyToAccount(privateKey);
+  const cfg = CHAINS[NETWORK];
   const client = createWalletClient({
     account,
-    chain: xLayer,
-    transport: http(rpcUrl || 'https://rpc.xlayer.tech'),
+    chain: cfg.chain,
+    transport: http(rpcUrl || process.env[cfg.rpcEnv] || cfg.rpc),
   }).extend(publicActions);
   // toFacilitatorEvmSigner ждёт объект с `address` + методами чтения/записи цепочки.
   return toFacilitatorEvmSigner(Object.assign(client, { address: account.address }) as any);

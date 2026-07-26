@@ -25,6 +25,7 @@ import { paymentMiddleware } from '@okxweb3/x402-express';
 import { x402ResourceServer } from '@okxweb3/x402-core/server';
 import { ExactEvmScheme } from '@okxweb3/x402-evm/exact/server';
 import { makeLocalFacilitatorClient, relayerAddress, NETWORK } from './x402/localFacilitator.js';
+import { bridgeBscToBase } from './x402/bridge.js';
 
 import { verifyIntent } from './verificationGate.js';
 import { attestVerdict, verifyAttestation, readAttestations, logAttestation, attestorPublicKey } from './attestation.js';
@@ -37,17 +38,40 @@ const PAY_TO = process.env.VEA_PAY_TO ?? '0xda9fa90cd39039af4a854e0bd7e3510e6a3a
 const RESOURCE = process.env.VEA_RESOURCE ?? 'https://vea-x402.onrender.com/verify';
 
 /**
- * Цена платного вызова — ТОЧНЫМ токеном, а не «$0.001».
- * USD₮0 на X Layer; адрес, decimals и пара EIP-712 (name/version) не выдуманы, а сверены:
- * адрес — из token-list самого OKX (okx/xlayer-tokenlist, chainId 196), домен — пересчётом
- * DOMAIN_SEPARATOR и сравнением с тем, что контракт отдаёт на цепочке. Неверная пара выглядит
- * в JSON нормально, но делает КАЖДУЮ подпись невалидной — поэтому проверено, а не принято на веру.
+ * Цена платного вызова — ТОЧНЫМ токеном, а не «$0.001», И ПОД СЕТЬ РАСЧЁТА.
+ *
+ * Пара EIP-712 (name/version) у каждой записи НЕ выдумана и не взята из документации: она
+ * подтверждена пересчётом DOMAIN_SEPARATOR и сравнением с тем, что контракт отдаёт на цепочке
+ * (`npx tsx src/tools/checkDomain.ts <сеть> <токен>`). Неверная пара выглядит в JSON совершенно
+ * нормально, но делает КАЖДУЮ подпись невалидной, и причина невидима.
+ *   ⚠ Живой пример цены этой проверки: для USDC на Base интуитивное name="USDC" — НЕВЕРНО.
+ *     Цепочка отдаёт name="USD Coin", version="2" (сверено 26.07, DOMAIN_SEPARATOR
+ *     0x02fa7265e7c5d81118673727957699e4d68f74cd74b7db77da710fe8a2c7834f).
+ *
+ * Реклама = способность: в challenge уходит ТОЛЬКО сеть, расчёт в которой я реально умею
+ * просадить (см. localFacilitator). Оставить «на всякий случай» сеть без газа = обещание
+ * без покрытия — ровно тот подлог, от которого защищает сам VEA.
  */
-const PRICE = {
-  asset: '0x779Ded0c9e1022225f8E0630b35a9b54bE713736',
-  amount: '1000', // атомарные единицы, 6 знаков = 0.001
-  extra: { name: 'USD₮0', version: '1', decimals: 6 },
+const PRICES: Record<string, { asset: string; amount: string; extra: Record<string, unknown> }> = {
+  // Base — сеть по умолчанию: единственная из поддержанных SDK, куда газ РЕАЛЬНО завозится
+  // (relay.link BSC→Base, котировка ~2 сек). USDC, 6 знаков.
+  'eip155:8453': {
+    asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    amount: '1000', // 0.001 USDC
+    extra: { name: 'USD Coin', version: '2', decimals: 6 },
+  },
+  // X Layer — оставлен рабочим на случай, если газ туда когда-нибудь станет доступен.
+  'eip155:196': {
+    asset: '0x779Ded0c9e1022225f8E0630b35a9b54bE713736',
+    amount: '1000', // 0.001 USD₮0
+    extra: { name: 'USD₮0', version: '1', decimals: 6 },
+  },
 };
+
+const PRICE = PRICES[NETWORK];
+if (!PRICE) {
+  throw new Error(`нет описания цены для сети ${NETWORK} — не отдавать challenge вслепую`);
+}
 
 const app = express();
 // За прокси Render: без этого req.protocol = http, и resource в challenge не совпадёт
@@ -176,5 +200,17 @@ app.post('/receipts/verify', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`VEA (official OKX x402 SDK) on :${PORT}`);
+  console.log(`  network: ${NETWORK}`);
   console.log(`  relayer: ${relayerAddress() ?? 'НЕ ЗАДАН — платный маршрут не сможет просадить расчёт'}`);
+
+  // ── РАЗОВЫЙ ЗАВОЗ ГАЗА (VEA_BRIDGE_ONCE=1) ────────────────────────────────
+  // Ключ ретранслятора живёт только здесь, в окружении Render — панель значения секретов
+  // не отдаёт. Значит подписать перевод BNB(BSC)→ETH(Base) может лишь этот процесс.
+  // Идемпотентно: если на BSC меньше резерва, функция просто ничего не делает.
+  // Не блокирует старт: сервис поднимается и обслуживает запросы, мост идёт фоном.
+  if (process.env.VEA_BRIDGE_ONCE === '1') {
+    bridgeBscToBase(true)
+      .then((r) => console.log('[мост] итог: ' + JSON.stringify(r)))
+      .catch((e) => console.error('[мост] ОШИБКА: ' + (e instanceof Error ? e.message : e)));
+  }
 });
