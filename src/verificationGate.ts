@@ -264,7 +264,11 @@ async function llmSanityCheck(intent: OnchainIntent): Promise<LlmResult> {
         headers: {
           'Content-Type': 'application/json',
           Referer: LLM_REFERRER,
-          'X-Title': 'VEA — pre-flight firewall for agent transactions',
+          // ⚠ ТОЛЬКО ASCII. Первая версия несла типографское тире (U+2014) — и весь вызов падал:
+          // «Cannot convert argument to a ByteString … value of 8212». Заголовки HTTP однобайтовые,
+          // а красивая пунктуация в них смертельна. Поймала это ПРОБА /health?deep=1, добавленная
+          // часом ранее ради чужой неисправности — и первым делом нашла мою собственную.
+          'X-Title': 'VEA pre-flight firewall for agent transactions',
         },
         body: JSON.stringify({
           referrer: LLM_REFERRER,
