@@ -115,11 +115,56 @@ const paidRoute = {
 // означает, что сеттлмент не выполняется — значит за бесполезный GET денег не берём.
 app.use(paymentMiddleware({ 'GET /verify': paidRoute, 'POST /verify': paidRoute } as any, resourceServer));
 
-app.get('/verify', (_req, res) => {
-  res.status(405).json({
-    error: 'payment accepted, but this resource is called with POST',
-    howToCall: { type: 'http', method: 'POST', bodyType: 'json', body: { intent: { action: 'transfer', to: '0x…', value: '…' } } },
-  });
+/**
+ * ОПЛАЧЕННЫЙ GET ОБЯЗАН ОТДАВАТЬ РЕЗУЛЬТАТ.
+ *
+ * ЧЕМ БЫЛО (и почему это ломало проверку — найдено НАСТОЯЩИМ платежом 26.07):
+ *   GET отвечал 405 «зови POST-ом». Замысел был честный — не брать денег за бесполезный GET
+ *   (статус ≥400 → их middleware не просаживает расчёт). Но я прогнала платёж их же
+ *   инструментом и увидела глазами ревьюера: `status: "failed", error: "merchant returned
+ *   HTTP 405"`. Он платит и получает ошибку. Со стороны это неотличимо от сломанного сервиса —
+ *   и ровно так звучал отказ №2: «prevents us from completing verification».
+ *
+ * ПОЧЕМУ ТЕПЕРЬ ТАК: «не взять денег» — не добродетель, если взамен ты отдал ошибку.
+ * Добродетель — отдать то, за что заплатили. GET делает НАСТОЯЩУЮ проверку:
+ *   • есть параметры запроса → проверяем описанное ими намерение;
+ *   • параметров нет → проверяем ДОКУМЕНТИРОВАННЫЙ образец и прямо помечаем это в ответе,
+ *     чтобы никто не принял демонстрацию за проверку своего намерения.
+ * Ответ той же формы, что у POST: один движок, никаких «демо-режимов».
+ */
+const SAMPLE_INTENT = {
+  action: 'transfer',
+  chain: 'base',
+  to: '0x0000000000000000000000000000000000000001',
+  amount: '0.01',
+  rationale: 'documented sample intent — GET without parameters verifies this one',
+};
+
+app.get('/verify', async (req, res) => {
+  try {
+    const q = req.query as Record<string, string | undefined>;
+    const fromQuery = q.action || q.to || q.amount || q.chain;
+    const intent: any = fromQuery
+      ? { action: q.action ?? 'transfer', chain: q.chain ?? 'base', to: q.to, amount: q.amount, ...(q.calldata ? { params: { calldata: q.calldata } } : {}) }
+      : { ...SAMPLE_INTENT };
+
+    const out = await handleVerify({ intent }, 'x402');
+    res.json({
+      ...out,
+      ...(fromQuery
+        ? {}
+        : {
+            note: 'No query parameters were supplied, so this is a verification of the documented SAMPLE intent, not of your own.',
+            sampleIntent: SAMPLE_INTENT,
+          }),
+      howToVerifyYourOwn: {
+        get: 'GET /verify?action=transfer&chain=base&to=0x…&amount=0.01 (or &calldata=0x…)',
+        post: { type: 'http', method: 'POST', bodyType: 'json', body: { intent: { action: 'transfer', to: '0x…', amount: '…' } } },
+      },
+    });
+  } catch (e) {
+    res.status(400).json({ error: String(e instanceof Error ? e.message : e) });
+  }
 });
 
 app.post('/verify', async (req, res) => {
