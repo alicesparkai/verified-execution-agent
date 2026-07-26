@@ -67,8 +67,16 @@ export function enqueueBroadcast(to: `0x${string}`, data: `0x${string}`, chain =
   });
 }
 
+/**
+ * Когда машина последний раз спрашивала работу. Нужно, чтобы «вещатель мёртв» было ВИДНО
+ * снаружи, а не выяснялось из проваленного платежа покупателя. Вчерашний урок в лоб:
+ * о своей неисправности узнавай проверкой, а не по жалобе оплатившего.
+ */
+let lastPollAt = 0;
+
 /** Машина забирает самое старое задание. null — работы нет. */
 export function claimJob(): { id: string; to: string; data: string; chain: string } | null {
+  lastPollAt = Date.now();
   const job = pending.shift();
   if (!job) return null;
   job.claimedAt = Date.now();
@@ -95,7 +103,13 @@ export function submitResult(id: string, txHash?: string, error?: string): boole
 
 /** Для /health?deep=1 — видно ли снаружи, что вещание живо. */
 export function queueStats() {
+  const ago = lastPollAt ? Date.now() - lastPollAt : null;
+  // Вещатель опрашивает раз в ~1.5 с. Молчит больше минуты — считаем оторванным и говорим прямо,
+  // а не показываем бодрый «ok». Индикатор обязан отражать способность, а не намерение.
+  const alive = ago !== null && ago < 60_000;
   return {
+    broadcaster: alive ? 'подключён' : lastPollAt ? 'ОТОРВАН' : 'ни разу не выходил на связь',
+    lastPollSecondsAgo: ago === null ? null : Math.round(ago / 1000),
     pending: pending.length,
     inFlight: inFlight.size,
     secretConfigured: Boolean(process.env.VEA_QUEUE_SECRET),

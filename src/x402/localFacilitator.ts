@@ -159,7 +159,9 @@ export function makeLocalFacilitatorClient(): LocalFacilitatorClient {
  * Показывать ключевой адрес там, где вещает кошелёк, значило бы врать в собственной диагностике.
  */
 export function relayerAddress(): string | null {
-  if (NETWORK === 'eip155:196') {
+  // ⚠ Учитывает И флаг VEA_BROADCAST_VIA: без этого диагностика врёт. 27.07 она показала мне
+  // EOA-адрес, когда вещал уже кошелёк, — и я десять минут ждала «выката», который давно был.
+  if (NETWORK === 'eip155:196' || process.env.VEA_BROADCAST_VIA === 'agentic') {
     const a = process.env.VEA_AGENTIC_WALLET;
     return a && /^0x[0-9a-fA-F]{40}$/.test(a) ? `${a} (агентский кошелёк OKX, газ спонсирован)` : null;
   }
