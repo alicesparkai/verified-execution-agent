@@ -15,7 +15,8 @@
     "serve": "tsx src/server.ts",
     "demo:agent": "tsx src/demoTrader.ts",
     "hedera:setup": "tsx src/hederaSetup.ts",
-    "hedera:demo": "tsx src/hederaDemo.ts"
+    "hedera:demo": "tsx src/hederaDemo.ts",
+    "serve:x402": "tsx src/serverX402.ts"
   },
   "dependencies": {
     "@hashgraph/sdk": "^2.81.0",
