@@ -90,6 +90,8 @@ const DENYLIST = new Set<string>([
 /** Pollinations free, OpenAI-compatible endpoint (no API key required). */
 const LLM_URL = 'https://text.pollinations.ai/openai';
 const LLM_MODEL = 'openai-fast';
+/** Кто мы для провайдера LLM. Он различает приложения по referrer — представляемся честно. */
+const LLM_REFERRER = process.env.VEA_LLM_REFERRER ?? 'https://vea-x402.onrender.com';
 
 // ---------------------------------------------------------------------------
 // (a) Structural validation
@@ -252,10 +254,20 @@ async function llmSanityCheck(intent: OnchainIntent): Promise<LlmResult> {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
 
-      const res = await fetch(LLM_URL, {
+      // ⚠ ПОЧЕМУ ЗДЕСЬ REFERRER (диагноз 26.07): тот же запрос отдаёт 200 с домашнего адреса
+      // и 402 с Render. Значит дело не в модели и не в теле, а в ТОМ, ОТКУДА идёт вызов:
+      // провайдер режет анонимные обращения из датацентров. Их API опознаёт приложения по
+      // `referrer` — представляемся явно и заголовком, и параметром (что именно он читает,
+      // из документации не следует однозначно, а стоимость обоих — ноль).
+      const res = await fetch(`${LLM_URL}?referrer=${encodeURIComponent(LLM_REFERRER)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Referer: LLM_REFERRER,
+          'X-Title': 'VEA — pre-flight firewall for agent transactions',
+        },
         body: JSON.stringify({
+          referrer: LLM_REFERRER,
           model: LLM_MODEL,
           messages: [
             { role: 'system', content: system },
@@ -315,6 +327,31 @@ async function llmSanityCheck(intent: OnchainIntent): Promise<LlmResult> {
 }
 
 /** Exponential-ish backoff between retry attempts (skips the wait on the last try). */
+/**
+ * Достижима ли LLM-нога ПРЯМО СЕЙЧАС — без оплаты и без выдумывания намерения.
+ *
+ * ЗАЧЕМ: 26.07 я узнала о деградации гейта единственным способом — заплатив за вызов и
+ * прочитав `reasons: ["LLM: unavailable … HTTP 402"]`. Это дорогой и поздний способ узнавать
+ * о собственной неисправности. Проба даёт тот же факт бесплатно и снаружи (`/health?deep=1`).
+ * Намеренно НЕ кэшируется: смысл пробы — сказать про СЕЙЧАС, а не про когда-то.
+ */
+export async function probeLlm(): Promise<{ ok: boolean; detail: string }> {
+  const probe: OnchainIntent = {
+    id: 'probe',
+    action: 'transfer',
+    chain: 'base',
+    to: '0x0000000000000000000000000000000000000001',
+    amount: '0.01',
+    rationale: 'health probe — not a real intent',
+  } as any;
+  try {
+    const r = await llmSanityCheck(probe);
+    return { ok: r.available, detail: r.available ? 'reachable' : r.reason };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 async function backoff(attempt: number): Promise<void> {
   const waitMs = Math.min(2000 * attempt, 8000);
   await new Promise((resolve) => setTimeout(resolve, waitMs));

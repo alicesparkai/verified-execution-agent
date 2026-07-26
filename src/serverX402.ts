@@ -27,7 +27,7 @@ import { ExactEvmScheme } from '@okxweb3/x402-evm/exact/server';
 import { makeLocalFacilitatorClient, relayerAddress, NETWORK } from './x402/localFacilitator.js';
 import { bridgeBscToBase, fundBuyer } from './x402/bridge.js';
 
-import { verifyIntent } from './verificationGate.js';
+import { verifyIntent, probeLlm } from './verificationGate.js';
 import { attestVerdict, verifyAttestation, readAttestations, logAttestation, attestorPublicKey } from './attestation.js';
 import { logEntry, readLedger } from './ledger.js';
 import type { OnchainIntent, Verdict } from './types.js';
@@ -213,12 +213,18 @@ async function handleVerify(body: any, payRef: string, settled?: any) {
 }
 
 // ── БЕСПЛАТНЫЕ МАРШРУТЫ ──────────────────────────────────────────────────────
-app.get('/health', (_req, res) => {
+app.get('/health', async (req, res) => {
+  // ?deep=1 — пробует ВТОРОЕ МНЕНИЕ (LLM-ногу) вживую. Обычный /health её не трогает,
+  // чтобы проверка здоровья не стоила задержки. Смысл: узнавать о собственной деградации
+  // проверкой, а не по жалобе оплатившего (шрам 26.07).
+  const deep = req.query.deep === '1' || req.query.deep === 'true';
+  const llm = deep ? await probeLlm() : undefined;
   res.json({
     ok: true,
     service: 'VEA',
     version: '0.3.0-x402sdk',
     attestor: attestorPublicKey(),
+    ...(llm ? { llm: { secondOpinion: llm.ok ? 'available' : 'DEGRADED', detail: llm.detail } } : {}),
     // адрес ретранслятора виден ФАКТОМ: если газа нет, платный маршрут не сможет
     // просадить расчёт — лучше это видеть снаружи, чем гадать
     relayer: relayerAddress(),
