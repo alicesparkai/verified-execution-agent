@@ -114,15 +114,28 @@ export function makeLocalFacilitatorClient(): LocalFacilitatorClient {
   // зато агентский кошелёк — ERC-4337 smart account со спонсором (доказано цепочкой
   // 26.07: tx 0xb11dcaace0…c587a прошла при НУЛЕВОМ балансе). Подменяется ровно точка
   // вещания, платёжный тракт SDK не тронут.
+  // VEA_BROADCAST_VIA=agentic принудительно включает эту ветку в ЛЮБОЙ сети.
+  // Зачем: сквозной тест на X Layer невозможен — чтобы заплатить самой, нужен USD₮0 в сети,
+  // куда ничего не завозится. Значит проверяю МЕХАНИКУ (подписант→очередь→CLI) там, где деньги
+  // есть — на Base, — а бесплатность вещания на 196 уже доказана отдельной транзакцией.
+  // Две проверки вместе покрывают путь, которого не покрыть одной.
   const agentic = process.env.VEA_AGENTIC_WALLET as `0x${string}` | undefined;
-  if (NETWORK === 'eip155:196') {
+  const viaAgentic = NETWORK === 'eip155:196' || process.env.VEA_BROADCAST_VIA === 'agentic';
+  if (viaAgentic) {
     if (!agentic || !/^0x[0-9a-fA-F]{40}$/.test(agentic)) {
       throw new Error(
         'VEA_AGENTIC_WALLET не задан (адрес агентского кошелька OKX, 0x + 40 hex). ' +
           'На X Layer расчёт вещает он — своего ключа с газом там нет и быть не может.',
       );
     }
-    const signer = makeAgenticSigner({ address: agentic, broadcast: enqueueBroadcast });
+    // Имя сети для CLI на машине: он принимает 'xlayer'/'base', а не CAIP-2.
+    const cliChain = NETWORK === 'eip155:196' ? 'xlayer' : 'base';
+    const signer = makeAgenticSigner({
+      address: agentic,
+      chain: CHAINS[NETWORK].chain,
+      rpcUrl: process.env[CHAINS[NETWORK].rpcEnv],
+      broadcast: (to, data) => enqueueBroadcast(to, data, cliChain),
+    });
     const facilitator = new x402Facilitator().register(NETWORK, new ExactEvmFacilitator(signer as any));
     return new LocalFacilitatorClient(facilitator);
   }

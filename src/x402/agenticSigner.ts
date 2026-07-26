@@ -28,7 +28,7 @@
  * Это цена того, что ключ вещания живёт в TEE-сессии на конкретном устройстве.
  */
 import { createPublicClient, http, encodeFunctionData } from 'viem';
-import { xLayer } from 'viem/chains';
+import { base, xLayer } from 'viem/chains';
 
 /** Как выглядит подписант глазами их фасилитатора (7 методов, см. шапку). */
 export type FacilitatorSigner = {
@@ -49,11 +49,15 @@ export function makeAgenticSigner(opts: {
   address: `0x${string}`;
   /** Кто фактически отправит вызов (очередь → машина → CLI). */
   broadcast: Broadcaster;
+  /** Сеть чтения. По умолчанию X Layer; на Base используется при проверке механики. */
+  chain?: typeof xLayer | typeof base;
   rpcUrl?: string;
 }): FacilitatorSigner {
+  const chain = opts.chain ?? xLayer;
+  const fallbackRpc = chain.id === base.id ? 'https://mainnet.base.org' : 'https://rpc.xlayer.tech';
   const pub = createPublicClient({
-    chain: xLayer,
-    transport: http(opts.rpcUrl || process.env.VEA_XLAYER_RPC || 'https://rpc.xlayer.tech'),
+    chain,
+    transport: http(opts.rpcUrl || fallbackRpc),
   });
 
   return {
