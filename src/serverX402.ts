@@ -105,7 +105,10 @@ const resourceServer = new x402ResourceServer(makeLocalFacilitatorClient() as an
 );
 
 const paidRoute = {
-  accepts: { scheme: 'exact', price: PRICE, network: NETWORK, payTo: PAY_TO, maxTimeoutSeconds: 60 },
+  // maxTimeoutSeconds 300, а не 60: их же документация советует давать покупателю запас.
+  // 60 с хватает при обычном расчёте, но у меня вещание идёт через очередь на мою машину —
+  // лишний запас ничего не стоит, а тесный лимит однажды обрежет медленный, но валидный платёж.
+  accepts: { scheme: 'exact', price: PRICE, network: NETWORK, payTo: PAY_TO, maxTimeoutSeconds: 300 },
   resource: RESOURCE,
   description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
   mimeType: 'application/json',

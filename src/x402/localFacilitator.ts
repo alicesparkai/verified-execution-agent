@@ -20,6 +20,7 @@
  * ВСЁ ЗДЕСЬ — ИХ КОД. Своего только переходник (три метода интерфейса FacilitatorClient),
  * потому что ResourceServer ждёт клиента, а у нас фасилитатор в том же процессе.
  */
+import { OKXFacilitatorClient } from '@okxweb3/x402-core';
 import { x402Facilitator } from '@okxweb3/x402-core/facilitator';
 import { ExactEvmScheme as ExactEvmFacilitator } from '@okxweb3/x402-evm/exact/facilitator';
 import { toFacilitatorEvmSigner } from '@okxweb3/x402-evm';
@@ -108,7 +109,41 @@ export class LocalFacilitatorClient {
  * Бросает ЯВНО, если ключа нет: без него платный маршрут не сможет просадить расчёт,
  * и лучше упасть на старте, чем молча отдавать 402, который невозможно закрыть (fail-loud).
  */
+/**
+ * ОФИЦИАЛЬНЫЙ ОБЛАЧНЫЙ ФАСИЛИТАТОР OKX — то, чего требует ревью.
+ *
+ * ПОЧЕМУ ОН ГЛАВНЫЙ (урок 27.07, стоил ПЯТИ отказов):
+ *   «Integrated with the official OKX Payment SDK» в их документации означает не «использую
+ *   их npm-пакеты» (пакеты у меня те же), а «расчёт просаживается ЧЕРЕЗ ИХ фасилитатор».
+ *   Их prerequisites дословно: «API key: apply at the OKX Developer Portal», и обязательная
+ *   архитектура начинается с `new OKXFacilitatorClient({apiKey, secretKey, passphrase})`.
+ *   Я два дня обходила недоступный портал, подняв фасилитатор у себя — обход работал
+ *   технически (расчёт доказан на цепочке) и САМ БЫЛ ПРИЧИНОЙ отказа.
+ *   Гейт доступа оказался не препятствием, а ОПРЕДЕЛЕНИЕМ соответствия.
+ *
+ * ПЛЮС: газ платят они. Значит вещатель и очередь для листинга больше не нужны —
+ * остаются рабочим запасным путём, если облако однажды откажет.
+ */
+function makeCloudFacilitatorClient(): unknown | null {
+  const apiKey = process.env.OKX_API_KEY;
+  const secretKey = process.env.OKX_SECRET_KEY;
+  const passphrase = process.env.OKX_PASSPHRASE;
+  if (!apiKey || !secretKey || !passphrase) return null;
+  return new OKXFacilitatorClient({ apiKey, secretKey, passphrase });
+}
+
 export function makeLocalFacilitatorClient(): LocalFacilitatorClient {
+  // ── ПРИОРИТЕТ: ОБЛАЧНЫЙ ФАСИЛИТАТОР OKX, если есть ключи портала ───────────
+  // Это ровно то, что ревью называет «интегрирован с официальным SDK». Ключи получены
+  // 27.07 через портал (открыт локальным прокси). Пока они есть — расчёт идёт через них,
+  // газ платят они, а мой вещатель остаётся запасным путём.
+  const cloud = makeCloudFacilitatorClient();
+  if (cloud) {
+    console.log('[фасилитатор] ОБЛАЧНЫЙ OKX (ключи портала) — сеть ' + NETWORK);
+    return cloud as LocalFacilitatorClient;
+  }
+  console.log('[фасилитатор] свой (ключей портала нет) — сеть ' + NETWORK);
+
   // ── ВЕТКА X LAYER: вещает агентский кошелёк OKX, газ платит их бандлер ──────
   // Своего ключа тут нет и не нужно: на 196 нативный OKB недоступен ни одним мостом,
   // зато агентский кошелёк — ERC-4337 smart account со спонсором (доказано цепочкой
