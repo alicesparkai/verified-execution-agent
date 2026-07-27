@@ -494,6 +494,19 @@ app.get('/ledger', (req, res) => {
   });
 });
 
+// ⚠ ПОРЯДОК ВАЖЕН: этот маршрут ДО '/receipts/:id'. Иначе параметрический перехватывает
+// слово "verify" как идентификатор чека и отвечает «no receipt for intentId verify» —
+// я на это уже наступила: выкатила инструкцию, а получила ту же 404, только другими словами.
+app.get('/receipts/verify', (_req, res) => {
+  res.json({
+    what: 'Verify an Ed25519-signed VEA receipt. This route is POST; you have sent GET.',
+    how: 'POST the "receipt" object from any /verify or /samples response — bare, or wrapped as {"receipt": …}.',
+    example: 'curl -s https://vea-x402.onrender.com/samples/burn-address | jq .receipt | curl -s -X POST https://vea-x402.onrender.com/receipts/verify -H "Content-Type: application/json" -d @-',
+    offline: 'You do not need this endpoint at all: verify the Ed25519 signature yourself against attestorPubKey. Not trusting us is the intended usage.',
+    attestorPubKey: attestorPublicKey(),
+  });
+});
+
 app.get('/receipts/:id', (req, res) => {
   const att = readAttestations().find((a) => a.intentId === req.params.id);
   if (!att) return res.status(404).json({ error: `no receipt for intentId ${req.params.id}` });
@@ -538,17 +551,6 @@ app.post('/receipts/verify', (req, res) => {
   });
 });
 
-// GET на тот же адрес — инструкция, а не 404. Судья, ткнувший ссылку из описания,
-// не должен упереться в страницу ошибки там, где мы обещаем проверяемость.
-app.get('/receipts/verify', (_req, res) => {
-  res.json({
-    what: 'Verify an Ed25519-signed VEA receipt. This route is POST; you have sent GET.',
-    how: 'POST the "receipt" object from any /verify or /samples response — bare, or wrapped as {"receipt": …}.',
-    example: 'curl -s https://vea-x402.onrender.com/samples/burn-address | jq .receipt | curl -s -X POST https://vea-x402.onrender.com/receipts/verify -H "Content-Type: application/json" -d @-',
-    offline: 'You do not need this endpoint at all: verify the Ed25519 signature yourself against attestorPubKey. Not trusting us is the intended usage.',
-    attestorPubKey: attestorPublicKey(),
-  });
-});
 
 // ── ОЧЕРЕДЬ ВЕЩАНИЯ (X Layer): сервис кладёт вызов, машина с кошельком забирает ──
 // Направление обратное не от удобства, а от реальности: у машины нет публичного адреса,
