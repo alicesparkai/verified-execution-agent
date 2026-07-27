@@ -12,3 +12,11 @@ attestations.jsonl
 .env
 .hedera-state.json
 *.mp4
+
+# Питч: промежуточное — пересоздаётся make_voice.ps1 + build_video.py.
+# Само VEA_pitch.mp4 НЕ игнорируем: 27.07 готовое видео исчезло с диска и с хостинга,
+# а заявка на него ссылалась. Артефакт, на который кто-то смотрит, должен лежать в git.
+pitch/voice/
+pitch/shots/
+pitch/_voice.wav
+pitch/_silent.mp4
