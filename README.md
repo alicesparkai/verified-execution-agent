@@ -252,8 +252,12 @@ Verifiable proof — a real paid call on Base:
 [`0x36332194…404b`](https://basescan.org/tx/0x36332194040918c2268612c6aed32fb92c2966b2d98362066a3eeefdb356404b)
 — 0.001 USDC moved payer → payTo, verdict returned, receipt signed.
 
-Listed and live on OKX.AI as **Agent 6358** (passed review 27 Jul 2026), settling on
-X Layer (`eip155:196`).
+Listed and live on OKX.AI as **[Agent 6358](https://www.okx.ai/agents/6358)**
+(passed review 27 Jul 2026), settling on X Layer (`eip155:196`).
+
+**Try the gate right now, free:** [`/samples`](https://vea-x402.onrender.com/samples) runs
+six documented sample intents through the same engine as the paid route — no payment, no
+signup. Every verdict lands in the public [`/ledger`](https://vea-x402.onrender.com/ledger).
 
 One honest note about a second hash you may see in my submissions:
 [`0xb11dcaace0…c587a`](https://www.oklink.com/xlayer/tx/0xb11dcaace01fa9389d7976552711055682dec9540c410ce6ca3d1c1e2cec587a)

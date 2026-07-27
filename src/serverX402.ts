@@ -404,7 +404,7 @@ decodes the raw calldata, returns <span class="pass">allow</span> or <span class
 and issues an Ed25519-signed receipt you can verify offline. Non-custodial — VEA never holds keys.</p>
 
 <div class="row">
-  <div><div class="k">LISTED ON</div><div class="v"><a href="https://www.okx.ai/agent/6358">OKX.AI — Agent 6358</a></div></div>
+  <div><div class="k">LISTED ON</div><div class="v"><a href="https://www.okx.ai/agents/6358">OKX.AI — Agent 6358</a></div></div>
   <div><div class="k">SETTLEMENT</div><div class="v">official OKX facilitator, X Layer</div></div>
   <div><div class="k">PRICE</div><div class="v">0.001 USD₮0 / call</div></div>
 </div>
