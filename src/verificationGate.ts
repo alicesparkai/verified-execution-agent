@@ -249,6 +249,62 @@ async function llmSanityCheck(intent: OnchainIntent): Promise<LlmResult> {
   const LLM_TIMEOUT_MS = Number(process.env.VEA_LLM_TIMEOUT_MS ?? 30_000);
   let lastReason = 'LLM unavailable';
 
+  // ── ОСНОВНОЙ ПРОВАЙДЕР: GitHub Models ─────────────────────────────────────
+  //
+  // ПОЧЕМУ ПЕРЕЕХАЛА. Pollinations режет анонимные вызовы: с домашнего адреса тот же
+  // запрос отдавал 200, с Render — 402, а под нагрузкой 429. То есть слой (c) на
+  // рабочем сервисе был выключен ВСЕГДА, и каждый вердикт нёс «LLM: unavailable»
+  // с уверенностью 0.6. Продукт заявляет четыре слоя — значит четвёртый обязан работать.
+  //
+  // ПОЧЕМУ ОТДЕЛЬНЫЙ УЗКИЙ ТОКЕН. У меня уже был токен GitHub, и он подошёл бы сразу —
+  // но у него право `repo`: полная запись во ВСЕ мои репозитории. Класть такой на
+  // сторонний хост ради текстовых запросов — променять чужую квоту на свой исходный код.
+  // Поэтому выпущен fine-grained токен с единственным правом `Models: read-only`:
+  // проверено, что инференс отвечает 200, а запись в репозиторий — 403.
+  const ghToken = process.env.VEA_GITHUB_MODELS_TOKEN;
+  if (ghToken) {
+    for (let attempt = 1; attempt <= Math.min(MAX_ATTEMPTS, 2); attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+        const res = await fetch('https://models.github.ai/inference/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ghToken}` },
+          body: JSON.stringify({
+            model: process.env.VEA_GITHUB_MODELS_MODEL ?? 'openai/gpt-4o-mini',
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: user },
+            ],
+            temperature: 0,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (res.status === 429 || res.status >= 500) {
+          lastReason = `LLM HTTP ${res.status}`;
+          await backoff(attempt);
+          continue;
+        }
+        if (!res.ok) {
+          lastReason = `GitHub Models HTTP ${res.status}`;
+          break; // не ретраим 401/403 — это конфигурация, а не всплеск нагрузки
+        }
+        const data: any = await res.json();
+        const text = data?.choices?.[0]?.message?.content;
+        const parsed = extractJson(String(text ?? '')) as { safe?: unknown; reason?: unknown } | undefined;
+        if (parsed && typeof parsed.safe === 'boolean') {
+          return { available: true, safe: parsed.safe, reason: String(parsed.reason ?? '') };
+        }
+        lastReason = 'LLM returned unparseable output';
+      } catch (e) {
+        lastReason = `LLM unavailable: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+    // Падать сюда — нормально: ниже отработает запасной провайдер, а если и он молчит,
+    // вернём available:false, и детерминированные проверки решат всё сами.
+  }
+
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const controller = new AbortController();
