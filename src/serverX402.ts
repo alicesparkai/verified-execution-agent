@@ -174,10 +174,12 @@ const SAMPLES: Record<string, { intent: any; why: string }> = {
     },
   },
   'unknown-selector': {
-    // ЧЕСТНО: здесь ALLOW с пометкой, а не DENY. Блокировать каждый неизвестный селектор
-    // значило бы запретить почти любой реальный вызов — брандмауэр, который всё запрещает,
-    // просто выключают. VEA различает «опасно» и «не могу подтвердить» и говорит, что именно.
-    why: 'Calldata whose function is not in the known map. Expect ALLOW carrying a FLAG: the effect is unverified, not proven dangerous.',
+    // ЕДИНСТВЕННЫЙ ОБРАЗЕЦ С НЕПРЕДРЕШЁННЫМ ИСХОДОМ — и обещать за него нельзя.
+    // Детерминированные правила ставят FLAG (не «опасно», а «не могу подтвердить»), а слой
+    // модели вправе поднять это до запрета. Живая проверка 27.07 дала BLOCK при уверенности
+    // 0.75 — то есть модель ужесточила решение, ровно как заявлено в архитектуре:
+    // слой (c) может ДОБАВИТЬ запрет, но не может снять чужой.
+    why: 'Calldata whose function is not in the known map. The deterministic layers FLAG it (unverified is not the same as dangerous); the model layer may escalate that to DENY. This is the one sample whose outcome is not predetermined — click and see what it decides.',
     intent: {
       action: 'contractCall', chain: 'base',
       to: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
@@ -420,7 +422,7 @@ No payment, no signup. Click one and read the verdict:</p>
 <li><a href="/samples/nft-drainer">nft-drainer</a> — <code>setApprovalForAll</code> hands over the whole collection → <span class="block">DENY</span></li>
 <li><a href="/samples/burn-address">burn-address</a> — destination is <code>0x000…000</code> → <span class="block">DENY</span></li>
 <li><a href="/samples/fat-finger">fat-finger</a> — amount above the cap, the extra-zeros mistake → <span class="block">DENY</span></li>
-<li><a href="/samples/unknown-selector">unknown-selector</a> — function not in the known map → <span class="pass">ALLOW</span> + <b>FLAG</b>: unverified is not the same as dangerous, and VEA says which</li>
+<li><a href="/samples/unknown-selector">unknown-selector</a> — function not in the known map: deterministic layers <b>FLAG</b> it, the model layer may escalate to <span class="block">DENY</span>. <b>Outcome not predetermined</b> — this is the one to click if you want to see the model layer earn its place.</li>
 <li><a href="/samples/safe-transfer">safe-transfer</a> — an ordinary payment that checks out → <span class="pass">ALLOW</span></li>
 </ul>
 <p>Every one of those lands in the <a href="/ledger">public ledger</a> — that is the ledger you are looking at.</p>
