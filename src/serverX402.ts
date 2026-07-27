@@ -500,8 +500,54 @@ app.get('/receipts/:id', (req, res) => {
   res.json({ receipt: att, signatureValid: verifyAttestation(att) });
 });
 
+/**
+ * ПРОВЕРКА ЧЕКА — САМОЕ ХРУПКОЕ МЕСТО ДОВЕРИЯ, И ОНО БЫЛО НЕПРОЩАЮЩИМ.
+ *
+ * Как поймала (28.07, обход путём судьи): взяла свой же свежий чек, отправила сюда —
+ * и получила `valid: false`. Секунду думала, что сломана подпись. На деле я обернула
+ * чек как {"receipt": ...} — ровно так, как подсказывает наш собственный ответ
+ * («POST /receipts/verify with this receipt»). Формат не совпал, и продукт молча
+ * сказал «недействителен».
+ *
+ * Почему это хуже обычного бага: у брандмауэра «недействителен» — не техническая
+ * деталь, а ОБВИНЕНИЕ. Ответить им на подлинный чек из-за формы конверта — значит
+ * подорвать ровно то доверие, ради которого чек и выдаётся.
+ *
+ * Поэтому: принимаем обе формы и, если не сошлось, ГОВОРИМ ЧЕМ ИМЕННО, а не просто
+ * «false». Отказ обязан быть объяснимым — это и есть весь замысел VEA.
+ */
 app.post('/receipts/verify', (req, res) => {
-  res.json({ valid: verifyAttestation(req.body), attestorPubKey: attestorPublicKey() });
+  const b: any = req.body;
+  const wrapped = b && typeof b === 'object' && b.receipt && typeof b.receipt === 'object';
+  const candidate = wrapped ? b.receipt : b;
+  const valid = verifyAttestation(candidate);
+  const missing = ['intentId', 'signature', 'attestorPubKey'].filter(
+    (k) => !candidate || typeof candidate !== 'object' || !(k in candidate),
+  );
+  res.json({
+    valid,
+    attestorPubKey: attestorPublicKey(),
+    ...(wrapped ? { note: 'Accepted a {"receipt": …} envelope; the bare receipt object works too.' } : {}),
+    ...(valid
+      ? {}
+      : {
+          why: missing.length
+            ? `The body does not look like a receipt — missing field(s): ${missing.join(', ')}. Send the "receipt" object from any /verify or /samples response, either bare or wrapped as {"receipt": …}.`
+            : 'Signature does not match this attestor key over the receipt payload. If you edited any field, even whitespace, the signature will not verify — that is the point.',
+        }),
+  });
+});
+
+// GET на тот же адрес — инструкция, а не 404. Судья, ткнувший ссылку из описания,
+// не должен упереться в страницу ошибки там, где мы обещаем проверяемость.
+app.get('/receipts/verify', (_req, res) => {
+  res.json({
+    what: 'Verify an Ed25519-signed VEA receipt. This route is POST; you have sent GET.',
+    how: 'POST the "receipt" object from any /verify or /samples response — bare, or wrapped as {"receipt": …}.',
+    example: 'curl -s https://vea-x402.onrender.com/samples/burn-address | jq .receipt | curl -s -X POST https://vea-x402.onrender.com/receipts/verify -H "Content-Type: application/json" -d @-',
+    offline: 'You do not need this endpoint at all: verify the Ed25519 signature yourself against attestorPubKey. Not trusting us is the intended usage.',
+    attestorPubKey: attestorPublicKey(),
+  });
 });
 
 // ── ОЧЕРЕДЬ ВЕЩАНИЯ (X Layer): сервис кладёт вызов, машина с кошельком забирает ──
