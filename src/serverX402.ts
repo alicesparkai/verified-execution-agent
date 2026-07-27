@@ -564,6 +564,19 @@ Free samples, same comparison logic:</p>
 <li><a href="/samples/attest-deviation">attest-deviation</a> — same declared intent, but the chain shows another recipient <i>and</i> 100× the amount → <span class="block">DEVIATION_DETECTED</span>, both named</li>
 </ul>
 
+<h2>What this actually protects: the money</h2>
+<p>Strip away the word «firewall» and VEA answers two questions an agent with spend authority
+cannot answer for itself:</p>
+<ul>
+<li><b>Is this payment about to go somewhere it should not?</b> Wrong recipient, an amount with
+extra zeros, a burn address, an allowance that never expires — checked <i>before</i> the signature exists.</li>
+<li><b>Did the money actually go where I said it would?</b> After execution, the declared intent is
+compared against the chain: recipient, amount, action. Any mismatch is named, not hinted at.</li>
+</ul>
+<p>That is the whole product: an agent moving funds without a second pair of eyes is one poisoned
+prompt away from an empty balance. The second pair of eyes costs 0.001 USDC and refuses to hold
+your keys.</p>
+
 <h2>Integrate in three lines</h2>
 <pre>import { vea } from './vea.js';                 // one file, zero dependencies
 const verdict = await vea.verify(intent);       // BEFORE signing
@@ -815,7 +828,7 @@ app.get('/ledger', (req, res) => {
     // Читатель обязан знать, ЧТО он видит. Часть записей — самотест витрины при старте,
     // и молчать об этом значило бы выдавать самопроверку за клиентский поток.
     whatYouAreLookingAt: {
-      note: 'On every cold start the service verifies its six documented sample intents and records the verdicts here. Free-tier hosting sleeps, so without that the ledger would read total:0 to anyone arriving after an idle period.',
+      note: 'On every cold start the service verifies its eight documented samples — six pre-flight intents and two post-execution attestations — and records the verdicts here. Free-tier hosting sleeps, so without that the ledger would read total:0 to anyone arriving after an idle period.',
       honesty: 'Same engine, no leniency for samples. These are real decisions under real rules — not payments, and not customer traffic.',
       seeSamples: 'https://vea-x402.onrender.com/samples',
     },
