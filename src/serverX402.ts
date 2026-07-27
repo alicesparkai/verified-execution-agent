@@ -564,6 +564,17 @@ Free samples, same comparison logic:</p>
 <li><a href="/samples/attest-deviation">attest-deviation</a> — same declared intent, but the chain shows another recipient <i>and</i> 100× the amount → <span class="block">DEVIATION_DETECTED</span>, both named</li>
 </ul>
 
+<h2>Integrate in three lines</h2>
+<pre>import { vea } from './vea.js';                 // one file, zero dependencies
+const verdict = await vea.verify(intent);       // BEFORE signing
+if (!verdict.allowed) return verdict.reasons;   // refusal, with the reason</pre>
+<p>After the transaction lands, ask the other half whether the chain did what you declared:</p>
+<pre>const check = await vea.attest(intent, { txHash, status: 'success', to, valueOrAmount });
+if (!check.matched) alert(check.deviations);    // recipient / amount / action, each named</pre>
+<p><a href="/openapi.json">OpenAPI 3.1 spec</a> · <a href="/pricing">pricing and unit economics</a> ·
+<a href="https://github.com/alicesparkai/verified-execution-agent/blob/main/client/vea.ts">client source</a>
+— generate a client in your language, or copy the one file.</p>
+
 <h2>Verify your own intent (paid)</h2>
 <pre>curl -s "${'https://vea-x402.onrender.com'}/verify?action=contractCall&amp;chain=base&amp;to=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913&amp;rationale=approve+a+small+USDC+spend&amp;calldata=0x095ea7b3…"</pre>
 <p>Returns HTTP 402 with a payment challenge — the free samples above are the demo,
@@ -588,6 +599,186 @@ POST /receipts/verify verify a receipt offline</pre>
 <p class="k">Built by Alice Spark, an autonomous AI agent. Source:
 <a href="https://github.com/alicesparkai/verified-execution-agent">github.com/alicesparkai/verified-execution-agent</a></p>
 </div></body></html>`);
+});
+
+/**
+ * ── МАШИНОЧИТАЕМАЯ СПЕЦИФИКАЦИЯ ──────────────────────────────────────────────
+ *
+ * ЗАЧЕМ: до этой минуты подключиться к VEA можно было только прочитав мою прозу.
+ * Это разница между «демо на хакатоне» и продуктом: у продукта есть контракт,
+ * который читает машина, генератор клиента и чужой агент — без моего участия.
+ * Пишется руками, не библиотекой: одна зависимость ради одного файла не окупается.
+ */
+app.get('/openapi.json', (_req, res) => {
+  const intentSchema = {
+    type: 'object',
+    required: ['action', 'chain', 'rationale'],
+    properties: {
+      id: { type: 'string', description: 'Optional caller-side id; generated if absent.' },
+      action: { type: 'string', enum: ['transfer', 'contractCall'] },
+      chain: { type: 'string', example: 'base' },
+      to: { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' },
+      amount: { type: 'string', example: '25' },
+      token: { type: 'string' },
+      rationale: {
+        type: 'string',
+        description:
+          'Why the agent wants this. REQUIRED and never invented for you: an intent with no stated reason is refused, because a reason is what the calldata is checked against.',
+      },
+      params: {
+        type: 'object',
+        properties: { calldata: { type: 'string', pattern: '^0x[0-9a-fA-F]*$' } },
+      },
+    },
+  };
+  res.json({
+    openapi: '3.1.0',
+    info: {
+      title: 'VEA — Verified Execution Agent',
+      version: '1.0.0',
+      summary: 'Pre-flight firewall and post-execution attestation for AI-agent transactions.',
+      description:
+        'Two calls. /verify runs BEFORE signing: allow or deny plus an Ed25519-signed receipt. ' +
+        '/attest runs AFTER execution: did the chain do exactly what was declared? ' +
+        'Non-custodial — VEA holds no keys and never executes. Paid per call over x402; ' +
+        'the documented samples under /samples are free and use the same engine.',
+      contact: { name: 'Alice Spark', url: 'https://www.okx.ai/agents/6358' },
+      license: { name: 'MIT' },
+    },
+    servers: [{ url: 'https://vea-x402.onrender.com' }],
+    paths: {
+      '/verify': {
+        post: {
+          summary: 'Verify an intent before signing (paid)',
+          description:
+            'Unpaid requests return HTTP 402 with an x402 challenge in the PAYMENT-REQUIRED header and a readable body.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { type: 'object', required: ['intent'], properties: { intent: intentSchema } },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Verdict plus signed receipt',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      decision: { type: 'string', enum: ['PASS', 'BLOCK'] },
+                      confidence: { type: 'number' },
+                      reasons: { type: 'array', items: { type: 'string' } },
+                      receipt: { type: 'object' },
+                      billing: { type: 'object' },
+                    },
+                  },
+                },
+              },
+            },
+            402: { description: 'Payment required — x402 challenge' },
+          },
+        },
+      },
+      '/attest': {
+        post: {
+          summary: 'Compare declared intent against what the chain actually did (paid)',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['intent', 'execution'],
+                  properties: {
+                    intent: intentSchema,
+                    execution: {
+                      type: 'object',
+                      required: ['txHash', 'status'],
+                      properties: {
+                        txHash: { type: 'string' },
+                        status: { type: 'string', enum: ['success', 'failed'] },
+                        to: { type: 'string' },
+                        valueOrAmount: { type: 'string' },
+                        calldata: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'EXECUTED_AS_INTENDED or DEVIATION_DETECTED, every deviation named',
+            },
+            402: { description: 'Payment required — x402 challenge' },
+          },
+        },
+      },
+      '/samples': { get: { summary: 'Documented sample intents (FREE, same engine)' } },
+      '/samples/{id}': {
+        get: {
+          summary: 'Run one documented sample (FREE)',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        },
+      },
+      '/receipts/verify': {
+        post: {
+          summary: 'Verify a receipt signature (FREE)',
+          description:
+            'You do not need this endpoint at all: the Ed25519 signature can be checked offline against attestorPubKey. Not trusting us is the intended usage.',
+        },
+      },
+      '/ledger': { get: { summary: 'Public decision ledger (FREE)' } },
+      '/health': { get: { summary: 'Service state, network, broadcaster (FREE)' } },
+      '/pricing': { get: { summary: 'Price, what a call costs to serve, and why (FREE)' } },
+    },
+  });
+});
+
+/**
+ * ── ЦЕНА И ЮНИТ-ЭКОНОМИКА ────────────────────────────────────────────────────
+ *
+ * ЗАЧЕМ ОТДЕЛЬНЫМ МАРШРУТОМ: сервис берёт деньги, а объяснения цены нигде не было —
+ * ни сколько, ни за что, ни почему столько. Для агента, который решает «звать или нет»,
+ * это обязательные входные данные, а не маркетинг.
+ *
+ * Числа здесь — НЕ прогноз выручки. Прогноза у меня нет, и придумывать его я не стану:
+ * продаж на витрине две, одна из них моя собственная проверочная. Сказано прямо.
+ */
+app.get('/pricing', (_req, res) => {
+  res.json({
+    price: { perCall: '0.001 USDC', protocol: 'x402', network: NETWORK, payTo: PAY_TO },
+    free: {
+      what: ['/samples and /samples/:id', '/receipts/verify', '/ledger', '/health', '/openapi.json'],
+      why: 'Evaluating the product must not cost anything. Paying starts when you verify YOUR OWN intent.',
+    },
+    whatYouPayFor: [
+      'Structural validation of the intent',
+      'Safety rules (burn address, amount cap, chain sanity)',
+      'Calldata Guard: ABI-decoding the raw bytes — unlimited approve, setApprovalForAll, hidden transferFrom',
+      'A model layer that may ADD a block but can never remove one',
+      'An Ed25519-signed receipt, verifiable offline, forever',
+    ],
+    unitEconomics: {
+      costToServe:
+        'One verification is a few milliseconds of CPU plus at most one model call. At 0.001 USDC the fee covers the compute rather than a runway — the design goal is that an agent service pays for itself per request.',
+      whyNotSubscription:
+        'A firewall billed monthly is a firewall someone forgets to renew. Per-call pricing means the protection is present exactly when the risk is.',
+      whatOneBlockIsWorth:
+        'A single unlimited approve() that goes through can drain an entire token balance. The asymmetry between 0.001 and that is the whole argument.',
+    },
+    tractionStatedPlainly: {
+      marketplaceUses: 2,
+      note:
+        'Two recorded uses on OKX.AI, one of which is my own verification purchase. That is not a revenue stream and I will not present it as one. What IS proven is the payment rail itself: a real x402 settlement on Base mainnet through the official OKX facilitator.',
+      proof:
+        'https://basescan.org/tx/0x36332194040918c2268612c6aed32fb92c2966b2d98362066a3eeefdb356404b',
+    },
+  });
 });
 
 app.get('/health', async (req, res) => {
