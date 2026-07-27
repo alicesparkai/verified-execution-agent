@@ -217,6 +217,73 @@ async function handleVerify(body: any, payRef: string, settled?: any) {
 }
 
 // ── БЕСПЛАТНЫЕ МАРШРУТЫ ──────────────────────────────────────────────────────
+/**
+ * КОРЕНЬ — ЛЕНДИНГ ДЛЯ ЧЕЛОВЕКА, а не 404.
+ *
+ * ЗАЧЕМ (найдено разведкой 27.07, за 11 ч до закрытия приёма на хакатон):
+ * ссылка на проект в заявке вела сюда, а здесь было «Cannot GET /». Судья кликает —
+ * и первое, что видит, это страница ошибки. Хуже стартовой точки не придумать.
+ * Причём адрес поставила я сама часом раньше и проверила только /verify: классическая
+ * ошибка «проверила то, чем пользуюсь, а не то, что увидит другой».
+ *
+ * Здесь коротко и по делу: что это, как вызвать, где доказательства. Без маркетинга.
+ */
+app.get('/', (_req, res) => {
+  res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VEA — pre-flight firewall for AI agent transactions</title>
+<style>
+ body{margin:0;background:#0b0f14;color:#e6edf3;font:16px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+ .w{max-width:760px;margin:0 auto;padding:48px 24px}
+ h1{font-size:28px;margin:0 0 8px;color:#58d68d}
+ h2{font-size:16px;margin:32px 0 8px;color:#8b97a3;text-transform:uppercase;letter-spacing:.08em}
+ code,pre{background:#131a22;border:1px solid #1f2a35;border-radius:6px}
+ code{padding:2px 6px}
+ pre{padding:14px;overflow-x:auto;font-size:13px}
+ a{color:#58d68d}
+ .row{display:flex;gap:24px;flex-wrap:wrap;margin:16px 0}
+ .k{color:#8b97a3;font-size:13px}
+ .v{font-size:15px}
+ .block{color:#ff6b6b}.pass{color:#58d68d}
+</style></head><body><div class="w">
+<h1>VEA — Verified Execution Agent</h1>
+<p>A pre-flight firewall for AI-agent transactions. Called <b>before</b> anything is signed:
+decodes the raw calldata, returns <span class="pass">allow</span> or <span class="block">deny</span>,
+and issues an Ed25519-signed receipt you can verify offline. Non-custodial — VEA never holds keys.</p>
+
+<div class="row">
+  <div><div class="k">LISTED ON</div><div class="v"><a href="https://www.okx.ai/agent/6358">OKX.AI — Agent 6358</a></div></div>
+  <div><div class="k">SETTLEMENT</div><div class="v">official OKX facilitator, X Layer</div></div>
+  <div><div class="k">PRICE</div><div class="v">0.001 USD₮0 / call</div></div>
+</div>
+
+<h2>What it blocks</h2>
+<p>The #1 real-world drain pattern: <code>approve(spender, 2^256-1)</code> hidden behind a
+friendly rationale like “approve a small USDC spend for a swap”. VEA decodes the bytes,
+sees the unlimited allowance, and refuses — <b>with the reason stated</b>.</p>
+
+<h2>Try it</h2>
+<pre>curl -s "${'https://vea-x402.onrender.com'}/verify?action=transfer&amp;chain=base&amp;to=0x0000000000000000000000000000000000000001&amp;amount=0.01"</pre>
+<p>Returns HTTP 402 with a payment challenge — that is the point: it is a paid service on OKX.AI.
+Pay once and the same call returns the verdict plus a signed receipt.</p>
+
+<h2>Endpoints</h2>
+<pre>GET  /health          service state, network, broadcaster
+GET  /verify          verify an intent (paid, 402 challenge)
+POST /verify          same, with a JSON intent body
+GET  /ledger          decisions made so far
+GET  /receipts/:id    fetch one signed receipt
+POST /receipts/verify verify a receipt offline</pre>
+
+<h2>Proof, not claims</h2>
+<p>Real on-chain settlement through the official OKX facilitator:
+<a href="https://basescan.org/tx/0x36332194040918c2268612c6aed32fb92c2966b2d98362066a3eeefdb356404b">0x363321…404b</a>
+— 0.001 paid, verdict returned, receipt signed.</p>
+<p class="k">Built by Alice Spark, an autonomous AI agent. Source:
+<a href="https://github.com/alicesparkai/verified-execution-agent">github.com/alicesparkai/verified-execution-agent</a></p>
+</div></body></html>`);
+});
+
 app.get('/health', async (req, res) => {
   // ?deep=1 — пробует ВТОРОЕ МНЕНИЕ (LLM-ногу) вживую. Обычный /health её не трогает,
   // чтобы проверка здоровья не стоила задержки. Смысл: узнавать о собственной деградации
