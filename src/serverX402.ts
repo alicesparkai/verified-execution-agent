@@ -344,6 +344,63 @@ const attestRoute = {
   resource: 'https://vea-x402.onrender.com/attest',
   description: 'Post-execution check: did the chain do exactly what the agent declared? (signed receipt)',
 };
+/**
+ * ПРОВЕРКА ПАРАМЕТРОВ ДО ДЕНЕГ (19.08, по замечанию ревью OKX).
+ *
+ * Дословно из карточки агента #6358: «your service only prompts for missing or
+ * incorrect parameters AFTER the buyer has completed the payment signature and
+ * deduction… parameter validation should be completed before payment».
+ *
+ * Замечание справедливое. Платёжный слой стоит ВЫШЕ хендлеров, поэтому счёт
+ * выставлялся раньше, чем кто-либо смотрел параметры: покупатель платил и лишь
+ * потом узнавал, что, скажем, не передал rationale — а без него гейт отказывает
+ * всегда. Деньги списаны, услуга не оказана.
+ *
+ * Здесь проверка переносится ПЕРЕД выставлением счёта. Ничего в платёжном тракте
+ * и в логике гейта не меняется — меняется только момент.
+ */
+function проверкаПередОплатой(req: any, res: any, next: any) {
+  const путь = String(req.path || '');
+  if (путь !== '/verify') return next();
+
+  const q = (req.method === 'GET' ? req.query : (req.body?.intent ?? req.body ?? {})) as Record<string, any>;
+  const намерениеПрислано = Boolean(q?.action || q?.to || q?.amount || q?.chain || q?.calldata);
+
+  // Намерения нет вовсе — это документированная проверка ОБРАЗЦА: ответ честно
+  // помечен note+sampleIntent, услуга оказывается. Пропускаю к оплате.
+  if (!намерениеПрислано) return next();
+
+  const нехватает: string[] = [];
+  const естьCalldata = Boolean(q?.calldata || q?.params?.calldata);
+
+  // rationale — не формальность: гейт отказывает без него ВСЕГДА, и заплативший
+  // клиент не может устранить причину задним числом.
+  if (!q?.rationale) нехватает.push('rationale');
+
+  if (!естьCalldata) {
+    if (!q?.to) нехватает.push('to');
+    if (!q?.amount) нехватает.push('amount');
+  }
+
+  if (нехватает.length === 0) return next();
+
+  return res.status(400).json({
+    error: 'Missing required parameters — checked BEFORE payment, so nothing was charged.',
+    missing: нехватает,
+    why: {
+      rationale:
+        'The gate refuses any intent with no stated reason. It is never invented for you, so an intent without it can only be denied.',
+      to_amount: 'A transfer intent needs a recipient and an amount — or raw calldata instead.',
+    },
+    example: {
+      get: '/verify?action=transfer&chain=base&to=0x…&amount=0.01&rationale=why+you+are+doing+this',
+      post: { intent: { action: 'transfer', chain: 'base', to: '0x…', amount: '0.01', rationale: 'why' } },
+    },
+    free: 'https://vea-x402.onrender.com/samples — documented sample intents, no payment required.',
+  });
+}
+app.use(проверкаПередОплатой);
+
 app.use(
   paymentMiddleware(
     {
