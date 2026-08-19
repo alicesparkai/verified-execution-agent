@@ -929,6 +929,27 @@ app.listen(PORT, () => {
       .catch((e) => console.error('[мост] ОШИБКА: ' + (e instanceof Error ? e.message : e)));
   }
 
+  // ── ПРОБА ДОСТУПНОСТИ OKX ИЗ RENDER (VEA_PROBE_OKX=1) ─────────────────────
+  // Решение 26.07 «облачный фасилитатор недоступен» принято по доступности С МОЕЙ
+  // МАШИНЫ. Но код работает ЗДЕСЬ, и ревьюер OKX стучится СЮДА. Проверяю фактом.
+  if (process.env.VEA_PROBE_OKX === '1') {
+    const цели = [
+      'https://web3.okx.com/api/v6/pay/x402/supported',
+      'https://www.okx.com/api/v5/public/time',
+    ];
+    for (const url of цели) {
+      const начало = Date.now();
+      fetch(url, { method: 'GET' })
+        .then((r) => console.log(`[проба OKX] ${url} -> HTTP ${r.status} за ${Date.now() - начало}мс`))
+        .catch((e) =>
+          console.log(
+            `[проба OKX] ${url} -> НЕ ДОСТУЧАЛАСЬ за ${Date.now() - начало}мс: ` +
+              String(e instanceof Error ? e.message : e).slice(0, 160),
+          ),
+        );
+    }
+  }
+
   // ── ВЫДАЧА КОШЕЛЬКУ-ИСПЫТАТЕЛЮ (VEA_FUND_BUYER=0x…) ───────────────────────
   // Нужна, чтобы прогнать НАСТОЯЩИЙ платёж по ноге приёма — она дважды роняла листинг.
   // Порог внутри не даёт перезапускам превратиться в раздачу денег.
