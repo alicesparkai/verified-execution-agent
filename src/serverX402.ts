@@ -99,7 +99,11 @@ app.use('/verify', async (req, res, next) => {
 });
 
 // ── ОФИЦИАЛЬНЫЙ ПЛАТЁЖНЫЙ ТРАКТ OKX ──────────────────────────────────────────
-const resourceServer = new x402ResourceServer(makeLocalFacilitatorClient() as any);
+// Ссылку на клиента держим отдельно: /health спрашивает у НЕГО, какие сети он реально
+// поддерживает. Через приватное поле resourceServer это не достать — проверено 20.08,
+// диагностика молча отвечала «facilitator did not answer», то есть врала бы про способность.
+const facilitatorClient = makeLocalFacilitatorClient();
+const resourceServer = new x402ResourceServer(facilitatorClient as any);
 for (const net of NETWORKS) resourceServer.register(net, new ExactEvmScheme());
 
 /**
@@ -854,6 +858,24 @@ app.get('/health', async (req, res) => {
     // просадить расчёт — лучше это видеть снаружи, чем гадать
     relayer: relayerAddress(),
     network: NETWORK,
+    // СЕТИ, ОБЪЯВЛЕННЫЕ В challenge, и — отдельно — сети, которые ПОДТВЕРДИЛ сам
+    // фасилитатор. Это разные утверждения, и путать их опасно: первое я пишу сама,
+    // второе отвечает тот, кто реально проводит расчёт. Если они разойдутся, значит
+    // я рекламирую сеть, которую не умею просадить, — тот самый подлог, от которого
+    // защищает VEA. Пусть расхождение видно СНАРУЖИ, а не выясняется из платежа покупателя.
+    networksAdvertised: NETWORKS,
+    facilitatorSupports: await (async () => {
+      try {
+        const sup: any = await (facilitatorClient as any)?.getSupported?.();
+        if (!sup) return 'facilitator did not answer';
+        const kinds = sup.kinds ?? sup.supported ?? sup;
+        return Array.isArray(kinds)
+          ? kinds.map((k: any) => (typeof k === 'string' ? k : k?.network)).filter(Boolean)
+          : kinds;
+      } catch (e) {
+        return 'probe failed: ' + (e as Error).message.slice(0, 120);
+      }
+    })(),
     // Состояние вещателя видно ВСЕГДА (не только при deep): если машина оторвалась,
     // расчёт на X Layer невозможен, и это обязано быть заметно СНАРУЖИ, а не выясняться
     // из проваленного платежа покупателя.
