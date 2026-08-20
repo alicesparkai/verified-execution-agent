@@ -1210,3 +1210,7 @@ app.listen(PORT, () => {
     })();
   }
 });
+
+// проверка канала публикации 20.08: git push починен (CRLF в ~/.git-credentials
+// не давал credential-store отдать пароль; system-конфиг тянул зависающий
+// credential-manager). Эта строка — проверка боем, что push доезжает.
