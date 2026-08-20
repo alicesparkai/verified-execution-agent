@@ -22,6 +22,9 @@ import { loadEnv } from './loadEnv.js';
 loadEnv();
 
 import { paymentMiddleware } from '@okxweb3/x402-express';
+// Тот же список сетей, что у гейта: предоплатная проверка обязана знать ровно
+// те же сети, иначе списки разойдутся и щель «плати и получи BLOCK» вернётся.
+import { KNOWN_CHAINS } from './verificationGate.js';
 import { x402ResourceServer } from '@okxweb3/x402-core/server';
 import { ExactEvmScheme } from '@okxweb3/x402-evm/exact/server';
 import { makeLocalFacilitatorClient, relayerAddress, NETWORK, NETWORKS } from './x402/localFacilitator.js';
@@ -404,6 +407,133 @@ const attestRoute = {
   resource: 'https://vea-x402.onrender.com/attest',
   description: 'Post-execution check: did the chain do exactly what the agent declared? (signed receipt)',
 };
+/**
+ * ВАЛИДАЦИЯ ПАРАМЕТРОВ ДО ОПЛАТЫ — требование OKX и просто честность.
+ *
+ * ПОВОД. Листинг отклонён дважды одной и той же формулировкой (19.08 и 20.08):
+ *   «Your service only prompts for missing or incorrect parameters AFTER the buyer
+ *    has completed the payment signature and deduction. Parameter validation should
+ *    be completed BEFORE payment.»
+ *
+ * Так и было. Платёжный middleware стоял выше обработчиков, а проверки жили внутри
+ * них: покупатель подписывал платёж, деньги списывались — и только потом узнавал,
+ * что забыл `rationale` или прислал сеть, которой сервис не знает. То же самое я
+ * нашла 20.08 с другой стороны, заплатив собственному сервису: расчёт прошёл,
+ * вердикт вернулся BLOCK «unknown chain». Деньги за отказ по формальности — брак.
+ *
+ * ЧТО ПРОВЕРЯЕМ ЗДЕСЬ. Только то, что гарантированно кончится формальным отказом
+ * и что покупатель может исправить сам: есть ли намерение, известна ли сеть, похож
+ * ли адрес на адрес, назван ли повод, знаком ли вид действия. Содержательные
+ * проверки (что calldata делает на самом деле, опасен ли получатель) остаются
+ * ПОСЛЕ оплаты — это и есть услуга, за неё платят.
+ *
+ * ГРАНИЦА. GET без параметров намерения не трогаем: у него свой сценарий образца.
+ * Сомнительное пропускаем дальше — лучше лишний раз оказать услугу, чем отказать
+ * платящему по своей строгости.
+ */
+const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
+const HEDERA_ID = /^\d+\.\d+\.\d+$/;
+const KNOWN_ACTIONS = new Set(['transfer', 'contractCall']);
+
+function paramProblems(intent: any): string[] {
+  const out: string[] = [];
+  if (!intent || typeof intent !== 'object') return ['missing "intent" object'];
+
+  if (!intent.action) {
+    out.push('missing "intent.action" (expected "transfer" or "contractCall")');
+  } else if (!KNOWN_ACTIONS.has(String(intent.action))) {
+    out.push('unknown "intent.action": ' + intent.action + ' (expected "transfer" or "contractCall")');
+  }
+
+  if (!intent.chain) {
+    out.push('missing "intent.chain" (e.g. "eip155:8453" or "base")');
+  } else if (!KNOWN_CHAINS.has(String(intent.chain))) {
+    out.push('unsupported "intent.chain": ' + intent.chain + ' — see /health.networksConfigured');
+  }
+
+  if (!intent.to) {
+    out.push('missing "intent.to" (destination address)');
+  } else {
+    const to = String(intent.to);
+    const isHedera = String(intent.chain ?? '').startsWith('hedera');
+    if (!EVM_ADDR.test(to) && !(isHedera && HEDERA_ID.test(to))) {
+      out.push('malformed "intent.to": ' + to + ' (expected 0x + 40 hex' + (isHedera ? ', or 0.0.x for Hedera' : '') + ')');
+    }
+  }
+
+  if (!intent.rationale || !String(intent.rationale).trim()) {
+    out.push('missing "intent.rationale" — the gate judges WHY the action is proposed');
+  }
+
+  if (intent.calldata !== undefined) {
+    const cd = String(intent.calldata);
+    if (!/^0x[0-9a-fA-F]*$/.test(cd) || cd.length % 2 !== 0) {
+      out.push('malformed "intent.calldata" (expected 0x-prefixed hex, even length)');
+    }
+  }
+
+  if (intent.amount !== undefined && intent.amount !== null && String(intent.amount).trim() !== '') {
+    const a = Number(intent.amount);
+    if (!Number.isFinite(a) || a < 0) out.push('malformed "intent.amount": ' + intent.amount);
+  }
+
+  return out;
+}
+
+const PARAM_EXAMPLE = {
+  intent: {
+    action: 'transfer',
+    chain: 'eip155:8453',
+    to: '0x' + 'a'.repeat(40),
+    amount: '25',
+    token: 'USDC',
+    rationale: 'why this action is proposed',
+  },
+};
+
+app.use(['/verify', '/attest'], (req, res, next) => {
+  // Платные только GET/POST /verify и POST /attest. GET /attest — бесплатная инструкция.
+  if (req.method === 'GET' && req.path.startsWith('/attest')) return next();
+
+  let intent: any;
+  if (req.method === 'POST') {
+    const body: any = req.body;
+    intent = body?.intent;              // POST /attest несёт { intent, execution }
+    if (!body || typeof body !== 'object' || intent === undefined) {
+      return res.status(400).json({
+        error: 'invalid request parameters',
+        problems: ['missing "intent" object'],
+        checkedBeforePayment: true,
+        hint: 'Fix the parameters and retry — no payment is required to learn this.',
+        example: PARAM_EXAMPLE,
+      });
+    }
+  } else {
+    const q = req.query as Record<string, string | undefined>;
+    if (!(q.action || q.to || q.amount || q.chain)) return next();   // сценарий образца
+    intent = {
+      action: q.action ?? 'transfer',
+      chain: q.chain ?? 'base',
+      to: q.to,
+      amount: q.amount,
+      rationale: q.rationale,
+      calldata: q.calldata,
+    };
+  }
+
+  const problems = paramProblems(intent);
+  if (problems.length) {
+    return res.status(400).json({
+      error: 'invalid request parameters',
+      problems,
+      checkedBeforePayment: true,
+      hint: 'Fix the parameters and retry — no payment is required to learn this.',
+      example: PARAM_EXAMPLE,
+    });
+  }
+  return next();
+});
+
 app.use(
   paymentMiddleware(
     {
