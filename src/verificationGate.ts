@@ -268,6 +268,64 @@ async function llmSanityCheck(intent: OnchainIntent): Promise<LlmResult> {
   // сторонний хост ради текстовых запросов — променять чужую квоту на свой исходный код.
   // Поэтому выпущен fine-grained токен с единственным правом `Models: read-only`:
   // проверено, что инференс отвечает 200, а запись в репозиторий — 403.
+  // ── ОСНОВНОЙ ПРОВАЙДЕР: QWEN CLOUD (OpenAI-совместимый) ──────────────────────
+  //
+  // ПОЧЕМУ ПЕРЕЕХАЛА СЮДА (20.08). GitHub Models закрывается: прямой вызов отдаёт
+  // HTTP 410 `github_models_retirement_brownout`. Это не отказ ключа — уходит сам
+  // сервис. Pollinations с Render отвечает 402 (см. комментарий ниже). Значит
+  // модельный слой не работал ВООБЩЕ, и каждый вердикт честно нёс «LLM: unavailable»
+  // — честно, но продукт заявляет четыре слоя, а работали три.
+  //
+  // Qwen Cloud: ключ выпущен 01.07, free tier 1M токенов до 19.11.2026, карта к
+  // аккаунту не привязана — то есть списаний быть не может по построению, а не по
+  // обещанию. Base URL взят из их документации, а не угадан: четыре попытки угадать
+  // путь дали 404, и это стоило времени.
+  const qwenKey = process.env.VEA_QWEN_KEY;
+  if (qwenKey) {
+    const qwenUrl = process.env.VEA_QWEN_URL
+      ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions';
+    for (let attempt = 1; attempt <= Math.min(MAX_ATTEMPTS, 2); attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+        const res = await fetch(qwenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${qwenKey}` },
+          body: JSON.stringify({
+            model: process.env.VEA_QWEN_MODEL ?? 'qwen3.8-max',
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: user },
+            ],
+            temperature: 0,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (res.status === 429 || res.status >= 500) {
+          lastReason = `Qwen HTTP ${res.status}`;
+          await backoff(attempt);
+          continue;
+        }
+        if (!res.ok) {
+          lastReason = `Qwen HTTP ${res.status}`;
+          break; // 401/403 — это конфигурация или неактивная квота, ретрай не поможет
+        }
+        const data: any = await res.json();
+        const text = data?.choices?.[0]?.message?.content;
+        const parsed = extractJson(String(text ?? '')) as { safe?: unknown; reason?: unknown } | undefined;
+        if (parsed && typeof parsed.safe === 'boolean') {
+          return { available: true, safe: parsed.safe, reason: String(parsed.reason ?? '') };
+        }
+        lastReason = 'Qwen returned unparseable output';
+        break;
+      } catch (e) {
+        lastReason = `Qwen: ${(e as Error).message.slice(0, 80)}`;
+        await backoff(attempt);
+      }
+    }
+  }
+
   const ghToken = process.env.VEA_GITHUB_MODELS_TOKEN;
   if (ghToken) {
     for (let attempt = 1; attempt <= Math.min(MAX_ATTEMPTS, 2); attempt++) {
