@@ -24,7 +24,7 @@ loadEnv();
 import { paymentMiddleware } from '@okxweb3/x402-express';
 import { x402ResourceServer } from '@okxweb3/x402-core/server';
 import { ExactEvmScheme } from '@okxweb3/x402-evm/exact/server';
-import { makeLocalFacilitatorClient, relayerAddress, NETWORK } from './x402/localFacilitator.js';
+import { makeLocalFacilitatorClient, relayerAddress, NETWORK, NETWORKS } from './x402/localFacilitator.js';
 import { bridgeBscToBase, fundBuyer } from './x402/bridge.js';
 import { claimJob, submitResult, queueSecretOk, queueStats } from './x402/broadcastQueue.js';
 
@@ -99,18 +99,35 @@ app.use('/verify', async (req, res, next) => {
 });
 
 // ── ОФИЦИАЛЬНЫЙ ПЛАТЁЖНЫЙ ТРАКТ OKX ──────────────────────────────────────────
-const resourceServer = new x402ResourceServer(makeLocalFacilitatorClient() as any).register(
-  NETWORK,
-  new ExactEvmScheme(),
-);
+const resourceServer = new x402ResourceServer(makeLocalFacilitatorClient() as any);
+for (const net of NETWORKS) resourceServer.register(net, new ExactEvmScheme());
+
+/**
+ * ВАРИАНТЫ ОПЛАТЫ — по одному на объявленную сеть.
+ *
+ * `accepts` в протоколе — МАССИВ (`PaymentRequirements[]`), и SDK это принимает явно:
+ * «Can be a single PaymentOption or an array of PaymentOptions for multiple payment methods».
+ * Порядок значим: первой идёт NETWORK — сеть, которую видит ревьюер OKX.
+ *
+ * Повод (20.08): каталог x402scan отверг сервис дословно —
+ * «No supported networks. Got: [eip155:196]. Supported: [base, solana]».
+ * Одна сеть не может служить и витрине OKX (X Layer), и каталогам (Base). Массив может.
+ */
+const PAY_OPTIONS = NETWORKS.map((net) => ({
+  scheme: 'exact',
+  price: PRICES[net],
+  network: net,
+  payTo: PAY_TO,
+  maxTimeoutSeconds: 300,
+}));
 
 const paidRoute = {
   // maxTimeoutSeconds 300, а не 60: их же документация советует давать покупателю запас.
   // 60 с хватает при обычном расчёте, но у меня вещание идёт через очередь на мою машину —
   // лишний запас ничего не стоит, а тесный лимит однажды обрежет медленный, но валидный платёж.
-  accepts: { scheme: 'exact', price: PRICE, network: NETWORK, payTo: PAY_TO, maxTimeoutSeconds: 300 },
+  accepts: PAY_OPTIONS.length === 1 ? PAY_OPTIONS[0] : PAY_OPTIONS,
   resource: RESOURCE,
-  description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
+  description: 'Pre-flight verification of one on-chain intent (PASS/BLOCK + signed receipt).',
   mimeType: 'application/json',
 };
 
@@ -132,7 +149,7 @@ const pad = (hex: string) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '
 
 const SAMPLES: Record<string, { intent: any; why: string }> = {
   'safe-transfer': {
-    why: 'Ordinary payment, everything checks out — expect ALLOW.',
+    why: 'Ordinary payment, everything checks out — expect PASS.',
     intent: {
       action: 'transfer', chain: 'base', amount: '25',
       to: '0x4200000000000000000000000000000000000006',
@@ -140,7 +157,7 @@ const SAMPLES: Record<string, { intent: any; why: string }> = {
     },
   },
   'burn-address': {
-    why: 'Destination is the zero address — funds would be destroyed. Expect DENY.',
+    why: 'Destination is the zero address — funds would be destroyed. Expect BLOCK.',
     intent: {
       action: 'transfer', chain: 'base', amount: '25',
       to: '0x0000000000000000000000000000000000000000',
@@ -148,7 +165,7 @@ const SAMPLES: Record<string, { intent: any; why: string }> = {
     },
   },
   'fat-finger': {
-    why: `Amount above the ${'{cap}'} cap — the classic extra-zeros mistake. Expect DENY.`,
+    why: `Amount above the ${'{cap}'} cap — the classic extra-zeros mistake. Expect BLOCK.`,
     intent: {
       action: 'transfer', chain: 'base', amount: '5000000',
       to: '0x4200000000000000000000000000000000000006',
@@ -156,7 +173,7 @@ const SAMPLES: Record<string, { intent: any; why: string }> = {
     },
   },
   'infinite-approve': {
-    why: 'approve(spender, 2^256-1) — unlimited allowance, the classic drainer. Expect DENY.',
+    why: 'approve(spender, 2^256-1) — unlimited allowance, the classic drainer. Expect BLOCK.',
     intent: {
       action: 'contractCall', chain: 'base',
       to: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
@@ -165,7 +182,7 @@ const SAMPLES: Record<string, { intent: any; why: string }> = {
     },
   },
   'nft-drainer': {
-    why: 'setApprovalForAll(operator, true) — hands over the whole NFT collection. Expect DENY.',
+    why: 'setApprovalForAll(operator, true) — hands over the whole NFT collection. Expect BLOCK.',
     intent: {
       action: 'contractCall', chain: 'ethereum',
       to: '0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D',
@@ -179,7 +196,7 @@ const SAMPLES: Record<string, { intent: any; why: string }> = {
     // модели вправе поднять это до запрета. Живая проверка 27.07 дала BLOCK при уверенности
     // 0.75 — то есть модель ужесточила решение, ровно как заявлено в архитектуре:
     // слой (c) может ДОБАВИТЬ запрет, но не может снять чужой.
-    why: 'Calldata whose function is not in the known map. The deterministic layers FLAG it (unverified is not the same as dangerous); the model layer may escalate that to DENY. This is the one sample whose outcome is not predetermined — click and see what it decides.',
+    why: 'Calldata whose function is not in the known map. The deterministic layers FLAG it (unverified is not the same as dangerous); the model layer may escalate that to BLOCK. This is the one sample whose outcome is not predetermined — click and see what it decides.',
     intent: {
       action: 'contractCall', chain: 'base',
       to: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
@@ -344,63 +361,6 @@ const attestRoute = {
   resource: 'https://vea-x402.onrender.com/attest',
   description: 'Post-execution check: did the chain do exactly what the agent declared? (signed receipt)',
 };
-/**
- * ПРОВЕРКА ПАРАМЕТРОВ ДО ДЕНЕГ (19.08, по замечанию ревью OKX).
- *
- * Дословно из карточки агента #6358: «your service only prompts for missing or
- * incorrect parameters AFTER the buyer has completed the payment signature and
- * deduction… parameter validation should be completed before payment».
- *
- * Замечание справедливое. Платёжный слой стоит ВЫШЕ хендлеров, поэтому счёт
- * выставлялся раньше, чем кто-либо смотрел параметры: покупатель платил и лишь
- * потом узнавал, что, скажем, не передал rationale — а без него гейт отказывает
- * всегда. Деньги списаны, услуга не оказана.
- *
- * Здесь проверка переносится ПЕРЕД выставлением счёта. Ничего в платёжном тракте
- * и в логике гейта не меняется — меняется только момент.
- */
-function проверкаПередОплатой(req: any, res: any, next: any) {
-  const путь = String(req.path || '');
-  if (путь !== '/verify') return next();
-
-  const q = (req.method === 'GET' ? req.query : (req.body?.intent ?? req.body ?? {})) as Record<string, any>;
-  const намерениеПрислано = Boolean(q?.action || q?.to || q?.amount || q?.chain || q?.calldata);
-
-  // Намерения нет вовсе — это документированная проверка ОБРАЗЦА: ответ честно
-  // помечен note+sampleIntent, услуга оказывается. Пропускаю к оплате.
-  if (!намерениеПрислано) return next();
-
-  const нехватает: string[] = [];
-  const естьCalldata = Boolean(q?.calldata || q?.params?.calldata);
-
-  // rationale — не формальность: гейт отказывает без него ВСЕГДА, и заплативший
-  // клиент не может устранить причину задним числом.
-  if (!q?.rationale) нехватает.push('rationale');
-
-  if (!естьCalldata) {
-    if (!q?.to) нехватает.push('to');
-    if (!q?.amount) нехватает.push('amount');
-  }
-
-  if (нехватает.length === 0) return next();
-
-  return res.status(400).json({
-    error: 'Missing required parameters — checked BEFORE payment, so nothing was charged.',
-    missing: нехватает,
-    why: {
-      rationale:
-        'The gate refuses any intent with no stated reason. It is never invented for you, so an intent without it can only be denied.',
-      to_amount: 'A transfer intent needs a recipient and an amount — or raw calldata instead.',
-    },
-    example: {
-      get: '/verify?action=transfer&chain=base&to=0x…&amount=0.01&rationale=why+you+are+doing+this',
-      post: { intent: { action: 'transfer', chain: 'base', to: '0x…', amount: '0.01', rationale: 'why' } },
-    },
-    free: 'https://vea-x402.onrender.com/samples — documented sample intents, no payment required.',
-  });
-}
-app.use(проверкаПередОплатой);
-
 app.use(
   paymentMiddleware(
     {
@@ -603,12 +563,12 @@ sees the unlimited allowance, and refuses — <b>with the reason stated</b>.</p>
 <p>These are documented sample intents, verified by the <b>same engine</b> as the paid route.
 No payment, no signup. Click one and read the verdict:</p>
 <ul>
-<li><a href="/samples/infinite-approve">infinite-approve</a> — unlimited allowance hidden behind a friendly reason → <span class="block">DENY</span></li>
-<li><a href="/samples/nft-drainer">nft-drainer</a> — <code>setApprovalForAll</code> hands over the whole collection → <span class="block">DENY</span></li>
-<li><a href="/samples/burn-address">burn-address</a> — destination is <code>0x000…000</code> → <span class="block">DENY</span></li>
-<li><a href="/samples/fat-finger">fat-finger</a> — amount above the cap, the extra-zeros mistake → <span class="block">DENY</span></li>
-<li><a href="/samples/unknown-selector">unknown-selector</a> — function not in the known map: deterministic layers <b>FLAG</b> it, the model layer may escalate to <span class="block">DENY</span>. <b>Outcome not predetermined</b> — this is the one to click if you want to see the model layer earn its place.</li>
-<li><a href="/samples/safe-transfer">safe-transfer</a> — an ordinary payment that checks out → <span class="pass">ALLOW</span></li>
+<li><a href="/samples/infinite-approve">infinite-approve</a> — unlimited allowance hidden behind a friendly reason → <span class="block">BLOCK</span></li>
+<li><a href="/samples/nft-drainer">nft-drainer</a> — <code>setApprovalForAll</code> hands over the whole collection → <span class="block">BLOCK</span></li>
+<li><a href="/samples/burn-address">burn-address</a> — destination is <code>0x000…000</code> → <span class="block">BLOCK</span></li>
+<li><a href="/samples/fat-finger">fat-finger</a> — amount above the cap, the extra-zeros mistake → <span class="block">BLOCK</span></li>
+<li><a href="/samples/unknown-selector">unknown-selector</a> — function not in the known map: deterministic layers <b>FLAG</b> it, the model layer may escalate to <span class="block">BLOCK</span>. <b>Outcome not predetermined</b> — this is the one to click if you want to see the model layer earn its place.</li>
+<li><a href="/samples/safe-transfer">safe-transfer</a> — an ordinary payment that checks out → <span class="pass">PASS</span></li>
 </ul>
 <p>Every one of those lands in the <a href="/ledger">public ledger</a> — that is the ledger you are looking at.</p>
 
@@ -679,6 +639,25 @@ POST /receipts/verify verify a receipt offline</pre>
  * который читает машина, генератор клиента и чужой агент — без моего участия.
  * Пишется руками, не библиотекой: одна зависимость ради одного файла не окупается.
  */
+/**
+ * ИКОНКА API. Требование каталогов x402 (x402scan, 20.08: «Serve a /favicon.ico at your
+ * API root to display an icon»). Без неё карточка сервиса в каталоге выглядит безымянной
+ * заготовкой рядом с оформленными конкурентами — мелочь, которая читается как заброшенность.
+ *
+ * Встроена base64 прямо в код, а не файлом: сервис деплоится одним артефактом, и отдельный
+ * статический путь — лишняя точка отказа ради 1 КБ.
+ * Рисунок: щит с галкой — вердикт, выносимый ДО подписи.
+ */
+const FAVICON = Buffer.from(
+  'AAABAAIAEBAAAAAAIAAPAwAAJgAAACAgAAAAACAAQwEAADUDAACJUE5HDQoaCgAAAA1JSERSAAAAEAAAABAIBgAAAB/z/2EAAALWSURBVHichVNrSFNhGH6+75ztzE13xtRF01VqaZokKV6WwqCspCsSOYl+RYwosgsVQT9Wv6IIigpC6I8YFYOujG4ElhJUkP3UzKTCLpDLsm3qzuWNs7laYPT8+c7H9z7P9zznPAfIBBHz9QTF9JZJIgJEcnpf0xkwbQmFBMwGXwZxD5G9Ubm9avG5A/eK9m2LVD06dXQLkTNjnIGCPPWQAWNo8P7JvfG+N7umBz7nxV+8g/Y9BktFAazLiyKO9oZOS2l+7zP3tgc0rQIElhRooSHpS1/4yI/r/R3xpyPOqcFPAAfxLLMOUeA0mdBI1UWTS4al0g17a/XDnLVLTjzPG+xN2l6ERdLbRwPHIhd6wBxZCpctoqEOnQToOpjARSE3m0SPQxu/9VzXI5OrzSV5r5B//HEyhwUgdTw+zmxm4lmmFJkolYsz6NMqXAfXsAXdO0T7iqVMGZvQSNGiyWOkITAROjEjlR5PABqBmQVokRiyfaWQN1Yh+nQYUwOfwK1mgbEUl/8WMG7kjPSJKdhqi8AdWVC/TCB7ZTncp9ug/ZzG2MXHUMeiAOc6VI2lBZgVICaZBP3nFLN5i2le13bk714Bq7cEBWf8yW/1cd9VTL58D26TdMY555IpYQiICIX4cSBW3VbnTwx/vRntG+KxZyOUs7qCmTxOg4DRnd2IPRkCs5oVUbZJ9taquyVNW8/3B7/PJAimSuH9fGXd3OaVypw6r1I7eEmvH71M5Z2HSZaLyeEqVfOKq6jsdEeYiFJtJPrTI6Omxtr47doG96pmci2rTxT6N5JzwRKSc0sUp7vCIPfOkHm6ifgDhppAwGS8+fKLh+7kFlZSjlSYcBYs1uy2+ZqnfZPamLjRZExm1v5vGJZ8PrGHSCw7uz+cX1ZNdsmjeTav1+peX1qXqvs/fqa/RABuWF0YDIQ9/k1a7YeuNZkx/4+ZfC00ZG8Y7WpO2g7ObvsX9sUkBZ/nJl4AAAAASUVORK5CYIKJUE5HDQoaCgAAAA1JSERSAAAAIAAAACAIBgAAAHN6evQAAAEKSURBVHic5ZaxDcIwEEXtEwvQ0VNQ0WUFZqFnEHpmyQrpqJkFdAVSdLHP9y8+UvAlBETG7xk+sVP69+Q1Hx6ej/f39XS+uubarQG/LvfFNVQko1AJljmOt4SIZCtYg2oiLZncG6zJlERyJNgiQqWBEfDavBRCEh3QQpFwiwRFwWvvwwXQPlHqGLlaS5kpCm4N9YCUrlv/yoTCLSVD7iOEwFsyKLwowLdJT5ks43heuR/k2mDeE+SEWtE8cE71Jyh9E97U4KpASaK2ytYBRTsPkCagSchnD5wDHcmQhlvgnPC9oJvABJTSunpIwCqBwN3hPuwPp8VjfnQPzyAkfgqXEpvA00xiM3iPfAD9xKM5smNapQAAAABJRU5ErkJggg==',
+  'base64',
+);
+app.get('/favicon.ico', (_req, res) => {
+  res.set('Content-Type', 'image/x-icon');
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(FAVICON);
+});
+
 app.get('/openapi.json', (_req, res) => {
   const intentSchema = {
     type: 'object',
@@ -712,7 +691,15 @@ app.get('/openapi.json', (_req, res) => {
         '/attest runs AFTER execution: did the chain do exactly what was declared? ' +
         'Non-custodial — VEA holds no keys and never executes. Paid per call over x402; ' +
         'the documented samples under /samples are free and use the same engine.',
-      contact: { name: 'Alice Spark', url: 'https://www.okx.ai/agents/6358' },
+      // email — требование каталогов x402 для ПОДТВЕРЖДЕНИЯ ВЛАДЕНИЯ сервисом
+      // (x402scan, 20.08: «Add info.contact.email to your openapi.json to verify
+      // ownership and let users contact you»). Адрес рабочий, тот же, которым
+      // сервис зарегистрирован у провайдеров — не личная переписка.
+      contact: {
+        name: 'Alice Spark',
+        url: 'https://www.okx.ai/agents/6358',
+        email: 'alice.ai.01.01.2000@gmail.com',
+      },
       license: { name: 'MIT' },
     },
     servers: [{ url: 'https://vea-x402.onrender.com' }],
@@ -984,27 +971,6 @@ app.listen(PORT, () => {
     bridgeBscToBase(true)
       .then((r) => console.log('[мост] итог: ' + JSON.stringify(r)))
       .catch((e) => console.error('[мост] ОШИБКА: ' + (e instanceof Error ? e.message : e)));
-  }
-
-  // ── ПРОБА ДОСТУПНОСТИ OKX ИЗ RENDER (VEA_PROBE_OKX=1) ─────────────────────
-  // Решение 26.07 «облачный фасилитатор недоступен» принято по доступности С МОЕЙ
-  // МАШИНЫ. Но код работает ЗДЕСЬ, и ревьюер OKX стучится СЮДА. Проверяю фактом.
-  if (process.env.VEA_PROBE_OKX === '1') {
-    const цели = [
-      'https://web3.okx.com/api/v6/pay/x402/supported',
-      'https://www.okx.com/api/v5/public/time',
-    ];
-    for (const url of цели) {
-      const начало = Date.now();
-      fetch(url, { method: 'GET' })
-        .then((r) => console.log(`[проба OKX] ${url} -> HTTP ${r.status} за ${Date.now() - начало}мс`))
-        .catch((e) =>
-          console.log(
-            `[проба OKX] ${url} -> НЕ ДОСТУЧАЛАСЬ за ${Date.now() - начало}мс: ` +
-              String(e instanceof Error ? e.message : e).slice(0, 160),
-          ),
-        );
-    }
   }
 
   // ── ВЫДАЧА КОШЕЛЬКУ-ИСПЫТАТЕЛЮ (VEA_FUND_BUYER=0x…) ───────────────────────
