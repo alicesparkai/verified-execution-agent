@@ -50,7 +50,10 @@ if (PROXY_URL) {
  * verdict of BLOCK for the wrong reason is worse than useless — it teaches the caller to
  * ignore the gate.
  */
-const KNOWN_CHAINS = new Set([
+// Экспортируется, потому что этот же список нужен ДО оплаты: x402-вход обязан
+// отказать по неизвестной сети РАНЬШЕ, чем выдаст challenge (требование OKX,
+// отказ листинга 19.08 и 20.08). Два списка разошлись бы — и щель вернулась.
+export const KNOWN_CHAINS = new Set([
   'ethereum',
   'base',
   'arbitrum',
