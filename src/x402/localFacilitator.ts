@@ -67,12 +67,45 @@ function pickNetwork(): SupportedNetwork {
 export const NETWORK: SupportedNetwork = pickNetwork();
 
 /**
+ * СЕТИ, КОТОРЫЕ УХОДЯТ В challenge (accepts — по протоколу МАССИВ).
+ *
+ * ЗАЧЕМ. 20.08 каталог x402scan отказал дословно:
+ *   «No supported networks. Got: [eip155:196]. Supported: [base, solana]».
+ * X Layer нужен листингу OKX (карточка агента #6358, chainIndex 196), Base — каталогам,
+ * где ходят покупатели: 11 млн транзакций и 22 тыс. покупателей за 30 дней против
+ * $1 523 выручки ВСЕЙ витрины OKX за тот же срок. Сети не конкурируют: один challenge
+ * может нести обе, покупатель выбирает свою.
+ *
+ * ОСТОРОЖНО ПО УМОЛЧАНИЮ. Без VEA_NETWORKS список = [NETWORK], то есть поведение
+ * ровно прежнее. Это важно: сервис стоит на ревью OKX, и правка кода не должна менять
+ * то, что видит ревьюер, пока я не включу вторую сеть намеренно.
+ *
+ * РЕКЛАМА = СПОСОБНОСТЬ. Сеть попадает в accepts, только если под неё есть чем просадить
+ * расчёт (см. makeLocalFacilitatorClient) — иначе это обещание без покрытия, ровно тот
+ * подлог, от которого защищает сам VEA.
+ */
+export const NETWORKS: SupportedNetwork[] = (() => {
+  const raw = process.env.VEA_NETWORKS;
+  if (!raw) return [NETWORK];
+  const list = raw.split(',').map((n) => n.trim()).filter(Boolean) as SupportedNetwork[];
+  const bad = list.filter((n) => !(n in CHAINS));
+  if (bad.length) {
+    throw new Error(
+      `VEA_NETWORKS содержит неподдержанные сети: ${bad.join(', ')}. ` +
+        `Доступны: ${Object.keys(CHAINS).join(', ')}.`,
+    );
+  }
+  // NETWORK всегда первой: её видит ревьюер OKX, а порядок в accepts — подсказка клиенту.
+  return [NETWORK, ...list.filter((n) => n !== NETWORK)];
+})();
+
+/**
  * Собрать подписанта фасилитатора из приватного ключа ретранслятора.
  * Ключ приходит ТОЛЬКО из окружения (Render env VEA_RELAYER_KEY) — в репозитории его нет.
  */
-function buildSigner(privateKey: `0x${string}`, rpcUrl?: string) {
+function buildSigner(privateKey: `0x${string}`, rpcUrl?: string, net: SupportedNetwork = NETWORK) {
   const account = privateKeyToAccount(privateKey);
-  const cfg = CHAINS[NETWORK];
+  const cfg = CHAINS[net];
   const client = createWalletClient({
     account,
     chain: cfg.chain,
@@ -155,36 +188,51 @@ export function makeLocalFacilitatorClient(): LocalFacilitatorClient {
   // есть — на Base, — а бесплатность вещания на 196 уже доказана отдельной транзакцией.
   // Две проверки вместе покрывают путь, которого не покрыть одной.
   const agentic = process.env.VEA_AGENTIC_WALLET as `0x${string}` | undefined;
-  const viaAgentic = NETWORK === 'eip155:196' || process.env.VEA_BROADCAST_VIA === 'agentic';
-  if (viaAgentic) {
-    if (!agentic || !/^0x[0-9a-fA-F]{40}$/.test(agentic)) {
+
+  /**
+   * Подписант ДЛЯ КОНКРЕТНОЙ СЕТИ. Раньше сеть была одна и бралась из глобальной NETWORK;
+   * с появлением NETWORKS (challenge несёт несколько accepts) у каждой сети свой путь:
+   *   · X Layer — только агентский кошелёк OKX: нативный OKB туда не завозится ни одним
+   *     мостом, зато кошелёк — ERC-4337 со спонсором газа (доказано цепочкой 26.07);
+   *   · Base — агентский, если включён VEA_BROADCAST_VIA=agentic, иначе свой EOA-ключ.
+   */
+  function signerFor(net: SupportedNetwork) {
+    const viaAgentic = net === 'eip155:196' || process.env.VEA_BROADCAST_VIA === 'agentic';
+    if (viaAgentic) {
+      if (!agentic || !/^0x[0-9a-fA-F]{40}$/.test(agentic)) {
+        throw new Error(
+          'VEA_AGENTIC_WALLET не задан (адрес агентского кошелька OKX, 0x + 40 hex). ' +
+            `В сети ${net} расчёт вещает он — своего ключа с газом там нет и быть не может.`,
+        );
+      }
+      // Имя сети для CLI на машине: он принимает 'xlayer'/'base', а не CAIP-2.
+      const cliChain = net === 'eip155:196' ? 'xlayer' : 'base';
+      return makeAgenticSigner({
+        address: agentic,
+        chain: CHAINS[net].chain,
+        rpcUrl: process.env[CHAINS[net].rpcEnv],
+        broadcast: (to, data) => enqueueBroadcast(to, data, cliChain),
+      });
+    }
+
+    // ── EOA-ветка: подписываем своим ключом (Base и прочие сети с доступным газом) ──
+    const pk = process.env.VEA_RELAYER_KEY as `0x${string}` | undefined;
+    if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) {
       throw new Error(
-        'VEA_AGENTIC_WALLET не задан (адрес агентского кошелька OKX, 0x + 40 hex). ' +
-          'На X Layer расчёт вещает он — своего ключа с газом там нет и быть не может.',
+        'VEA_RELAYER_KEY не задан (нужен приватный ключ ретранслятора, 0x + 64 hex). ' +
+          `Без него фасилитатор не сможет просадить расчёт в сети ${net}.`,
       );
     }
-    // Имя сети для CLI на машине: он принимает 'xlayer'/'base', а не CAIP-2.
-    const cliChain = NETWORK === 'eip155:196' ? 'xlayer' : 'base';
-    const signer = makeAgenticSigner({
-      address: agentic,
-      chain: CHAINS[NETWORK].chain,
-      rpcUrl: process.env[CHAINS[NETWORK].rpcEnv],
-      broadcast: (to, data) => enqueueBroadcast(to, data, cliChain),
-    });
-    const facilitator = new x402Facilitator().register(NETWORK, new ExactEvmFacilitator(signer as any));
-    return new LocalFacilitatorClient(facilitator);
+    return buildSigner(pk, process.env.VEA_BASE_RPC, net);
   }
 
-  // ── ВЕТКА BASE (и прочие EOA-сети): подписываем своим ключом ────────────────
-  const pk = process.env.VEA_RELAYER_KEY as `0x${string}` | undefined;
-  if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) {
-    throw new Error(
-      'VEA_RELAYER_KEY не задан (нужен приватный ключ ретранслятора, 0x + 64 hex). ' +
-        `Без него фасилитатор не сможет просадить расчёт в сети ${NETWORK}.`,
-    );
+  // Регистрируем КАЖДУЮ объявленную сеть. Если под какую-то нет подписанта — падаем здесь,
+  // на старте, а не в момент расчёта у покупателя: обещание без покрытия хуже отказа.
+  const facilitator = new x402Facilitator();
+  for (const net of NETWORKS) {
+    facilitator.register(net, new ExactEvmFacilitator(signerFor(net) as any));
   }
-  const signer = buildSigner(pk, process.env.VEA_BASE_RPC);
-  const facilitator = new x402Facilitator().register(NETWORK, new ExactEvmFacilitator(signer));
+  console.log('[фасилитатор] сети расчёта: ' + NETWORKS.join(', '));
   return new LocalFacilitatorClient(facilitator);
 }
 
