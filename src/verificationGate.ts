@@ -70,6 +70,13 @@ const KNOWN_CHAINS = new Set([
   'eip155:295', // Hedera mainnet, EVM view
   'xlayer',
   'eip155:196', // X Layer, where the OKX.AI listing settles
+  // Base in CAIP-2 form. 'base' by name was already here, but a paying client
+  // sends the chain as "eip155:8453" — and the gate refused it as an unknown
+  // chain WHILE CHARGING for the call. Found 20.08 by paying my own service:
+  // settlement landed on chain, verdict came back BLOCK for a formal reason.
+  // This is exactly the failure the sepolia comment above warns about, hit a
+  // second time: I added the SETTLEMENT network without adding the INTENT network.
+  'eip155:8453',
 ]);
 
 /** Absurdly-large-amount cap. Anything above this is auto-blocked. */
