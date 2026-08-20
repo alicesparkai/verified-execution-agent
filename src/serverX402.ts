@@ -104,7 +104,46 @@ app.use('/verify', async (req, res, next) => {
 // диагностика молча отвечала «facilitator did not answer», то есть врала бы про способность.
 const facilitatorClient = makeLocalFacilitatorClient();
 const resourceServer = new x402ResourceServer(facilitatorClient as any);
-for (const net of NETWORKS) resourceServer.register(net, new ExactEvmScheme());
+
+/**
+ * СЕТИ, КОТОРЫЕ РЕАЛЬНО РЕГИСТРИРУЕМ = объявленные ∩ подтверждённые фасилитатором.
+ *
+ * ПОЧЕМУ НЕ ПРОСТО NETWORKS (20.08). Дважды упал деплой:
+ * `RouteConfigurationError: Facilitator does not support scheme "exact" on network
+ * "eip155:8453"` — в переменной осталась сеть, которую облачный фасилитатор OKX не
+ * держит. Лишняя строка в конфиге роняла ВЕСЬ сервис, включая работающую сеть.
+ *
+ * Теперь спрашиваю фасилитатор сам и беру пересечение. Непокрытая сеть просто не
+ * попадает в accepts — принцип «реклама = способность» проверяется на СТАРТЕ, а не
+ * выясняется падением.
+ *
+ * Если фасилитатор молчит — оставляем список как есть: молчание прибора не факт
+ * о сетях, а отказ прибора (канон «отказ прибора — читать, а не толковать»).
+ */
+const ACTIVE_NETWORKS: typeof NETWORKS = await (async () => {
+  if (NETWORKS.length <= 1) return NETWORKS;
+  try {
+    const sup: any = await (facilitatorClient as any)?.getSupported?.();
+    const kinds = sup?.kinds ?? sup?.supported ?? sup;
+    const list: string[] = Array.isArray(kinds)
+      ? kinds.map((k: any) => (typeof k === 'string' ? k : k?.network)).filter(Boolean)
+      : [];
+    if (!list.length) return NETWORKS;
+    const ok = NETWORKS.filter((n) => list.includes(n));
+    const dropped = NETWORKS.filter((n) => !list.includes(n));
+    if (dropped.length) {
+      console.log(`[сети] фасилитатор не держит: ${dropped.join(', ')} — исключены из accepts`);
+    }
+    // Ни одной подтверждённой — оставляем объявленное: пусть SDK скажет своё слово,
+    // чем я молча оставлю сервис без единого платного маршрута.
+    return ok.length ? ok : NETWORKS;
+  } catch (e) {
+    console.log(`[сети] фасилитатор не ответил (${(e as Error).message.slice(0, 60)}) — список без изменений`);
+    return NETWORKS;
+  }
+})();
+
+for (const net of ACTIVE_NETWORKS) resourceServer.register(net, new ExactEvmScheme());
 
 /**
  * ВАРИАНТЫ ОПЛАТЫ — по одному на объявленную сеть.
@@ -117,7 +156,7 @@ for (const net of NETWORKS) resourceServer.register(net, new ExactEvmScheme());
  * «No supported networks. Got: [eip155:196]. Supported: [base, solana]».
  * Одна сеть не может служить и витрине OKX (X Layer), и каталогам (Base). Массив может.
  */
-const PAY_OPTIONS = NETWORKS.map((net) => ({
+const PAY_OPTIONS = ACTIVE_NETWORKS.map((net) => ({
   scheme: 'exact',
   price: PRICES[net],
   network: net,
@@ -863,7 +902,8 @@ app.get('/health', async (req, res) => {
     // второе отвечает тот, кто реально проводит расчёт. Если они разойдутся, значит
     // я рекламирую сеть, которую не умею просадить, — тот самый подлог, от которого
     // защищает VEA. Пусть расхождение видно СНАРУЖИ, а не выясняется из платежа покупателя.
-    networksAdvertised: NETWORKS,
+    networksAdvertised: ACTIVE_NETWORKS,
+    networksConfigured: NETWORKS,
     facilitatorSupports: await (async () => {
       try {
         const sup: any = await (facilitatorClient as any)?.getSupported?.();
