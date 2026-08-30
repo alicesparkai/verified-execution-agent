@@ -83,6 +83,36 @@ const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '256kb' }));
 
+// ⚡ CORS для ПУБЛИЧНЫХ описаний (30.08.2026).
+// Каталоги агентских API (x402scan и подобные) проверяют сервис из браузера.
+// Без этого заголовка браузер не читает даже отдающийся по HTTP 200 файл, и
+// каталог считает все маршруты сломанными: у меня это выглядело как
+// «0 valid resources, 8 endpoints with error», хотя сервис был исправен.
+// Открыты только описания: спецификация, цены, здоровье, бесплатная витрина.
+// Платные маршруты (/verify, /attest) НЕ открываются — их рубеж это оплата.
+const PUBLIC_DESCRIBE = [
+  '/openapi.json',
+  '/pricing',
+  '/health',
+  '/samples',
+  '/receipts/verify',
+];
+app.use((req, res, next) => {
+  const p = req.path || '';
+  if (PUBLIC_DESCRIBE.some((x) => p === x || p.startsWith(x + '/'))) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+  }
+  next();
+});
+
+
+
 // ── РЕЛЬС HEDERA — ДО их middleware ──────────────────────────────────────────
 // Их middleware перехватывает любой payment-signature/x-payment. Hedera-платёж (tx id)
 // для него чужой формат → унесёт на фасилитатор и откажет. Поэтому обслуживаем сами и
@@ -858,6 +888,30 @@ app.get('/openapi.json', (_req, res) => {
     info: {
       title: 'VEA — Verified Execution Agent',
       version: '1.0.0',
+      // Требование каталогов агентских API: объяснить агенту, КАК пользоваться
+      // сервисом, а не только перечислить маршруты (x402scan, discovery spec:
+      // «Add high-level guidance in info.x-guidance for user-friendly discovery»).
+      'x-guidance':
+        'Use VEA in two places around a transaction you are about to make.\n\n' +
+        '1) BEFORE signing, POST /verify with the intent you are about to execute ' +
+        '(action, chain, destination, amount, and a short rationale). VEA answers ' +
+        'allow or deny and returns an Ed25519-signed receipt of that decision. ' +
+        'Deny means: do not sign. The receipt is what you keep as evidence that the ' +
+        'check happened before the money moved, not after.\n\n' +
+        '2) AFTER execution, POST /attest with the transaction hash and the original ' +
+        'intent. VEA compares what the chain actually did against what you declared ' +
+        'and signs that comparison. This is the part that catches a transaction that ' +
+        'succeeded but did something other than intended.\n\n' +
+        'VEA is non-custodial: it holds no keys, never signs your transaction and ' +
+        'never executes anything. It only inspects and attests.\n\n' +
+        'To try it for free before paying: GET /samples lists documented sample ' +
+        'intents verified by the same engine, and GET /samples/{id} shows one in ' +
+        'full. Paid calls are /verify and /attest, priced per call over x402; GET ' +
+        '/pricing states the current price and the network to pay on. A call without ' +
+        'payment returns HTTP 402 with the challenge, which is the normal first step, ' +
+        'not an error.\n\n' +
+        'Receipts can be checked by anyone: POST /receipts/verify with a receipt ' +
+        'validates its signature without calling the paid routes.',
       summary: 'Pre-flight firewall and post-execution attestation for AI-agent transactions.',
       description:
         'Two calls. /verify runs BEFORE signing: allow or deny plus an Ed25519-signed receipt. ' +
