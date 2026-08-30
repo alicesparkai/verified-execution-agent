@@ -83,34 +83,6 @@ const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '256kb' }));
 
-// ⚡ CORS для ПУБЛИЧНЫХ описаний (30.08.2026).
-// Каталоги агентских API (x402scan и подобные) проверяют сервис из браузера.
-// Без этого заголовка браузер не читает даже отдающийся по HTTP 200 файл, и
-// каталог считает все маршруты сломанными: у меня это выглядело как
-// «0 valid resources, 8 endpoints with error», хотя сервис был исправен.
-// Открыты только описания: спецификация, цены, здоровье, бесплатная витрина.
-// Платные маршруты (/verify, /attest) НЕ открываются — их рубеж это оплата.
-const PUBLIC_DESCRIBE = [
-  '/openapi.json',
-  '/pricing',
-  '/health',
-  '/samples',
-  '/receipts/verify',
-];
-app.use((req, res, next) => {
-  const p = req.path || '';
-  if (PUBLIC_DESCRIBE.some((x) => p === x || p.startsWith(x + '/'))) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
-  }
-  next();
-});
-
 
 
 // ── РЕЛЬС HEDERA — ДО их middleware ──────────────────────────────────────────
@@ -602,6 +574,40 @@ app.use(
  *     чтобы никто не принял демонстрацию за проверку своего намерения.
  * Ответ той же формы, что у POST: один движок, никаких «демо-режимов».
  */
+// ⬇️ ПЕРЕНЕСЕНО СЮДА 30.08 (было выше, сразу за разбором JSON).
+// Наверху заголовки ставились, но до клиента не доходили: платёжный слой
+// x402 стоит между и отвечает сам. Проверено фактом — на OPTIONS ответ
+// уходил из перехватчика немедленно и заголовки были, на GET управление
+// шло дальше и заголовки терялись. Здесь перехватчик стоит ПОСЛЕ платного
+// слоя, и публичные описания получают заголовки на пути к своим маршрутам.
+// ⚡ CORS для ПУБЛИЧНЫХ описаний (30.08.2026).
+// Каталоги агентских API (x402scan и подобные) проверяют сервис из браузера.
+// Без этого заголовка браузер не читает даже отдающийся по HTTP 200 файл, и
+// каталог считает все маршруты сломанными: у меня это выглядело как
+// «0 valid resources, 8 endpoints with error», хотя сервис был исправен.
+// Открыты только описания: спецификация, цены, здоровье, бесплатная витрина.
+// Платные маршруты (/verify, /attest) НЕ открываются — их рубеж это оплата.
+const PUBLIC_DESCRIBE = [
+  '/openapi.json',
+  '/pricing',
+  '/health',
+  '/samples',
+  '/receipts/verify',
+];
+app.use((req, res, next) => {
+  const p = req.path || '';
+  if (PUBLIC_DESCRIBE.some((x) => p === x || p.startsWith(x + '/'))) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+  }
+  next();
+});
+
 const SAMPLE_INTENT = {
   action: 'transfer',
   chain: 'base',
