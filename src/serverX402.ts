@@ -529,7 +529,17 @@ app.use(['/verify', '/attest'], (req, res, next) => {
   if (req.method === 'POST') {
     const body: any = req.body;
     intent = body?.intent;              // POST /attest несёт { intent, execution }
-    if (!body || typeof body !== 'object' || intent === undefined) {
+    // ⚡ ПУСТОЕ ТЕЛО — это проба каталога, а не ошибка вызывающего (30.08).
+    // Каталоги агентских API стучатся пустым POST, чтобы узнать, платный ли
+    // маршрут, и ждут 402 с challenge. Моя проверка параметров стоит РАНЬШЕ
+    // платного слоя (это верно: не брать деньги за заведомо неверный запрос),
+    // но для пробы она давала 400, и каталог считал маршрут сломанным —
+    // дословно «Expected 402, got 400». Пропускаю пробу дальше; разбор кривых
+    // параметров ниже сохраняется полностью для настоящих вызовов.
+    const телоПустое =
+      !body || (typeof body === 'object' && Object.keys(body).length === 0);
+    if (телоПустое) return next();
+    if (typeof body !== 'object' || intent === undefined) {
       return res.status(400).json({
         error: 'invalid request parameters',
         problems: ['missing "intent" object'],
