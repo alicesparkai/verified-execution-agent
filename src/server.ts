@@ -30,6 +30,9 @@ import {
 import { logEntry, readLedger } from './ledger.js';
 import type { OnchainIntent, Verdict } from './types.js';
 import { hederaAccept, verifyHederaPayment, anchorReceipt, HEDERA, type PaymentCheck } from './hederaRail.js';
+// PAID_CALL_SCHEMA вынесена в общий модуль 08.09: копия в двух файлах
+// разошлась бы при первой правке молча — один источник на оба тракта.
+import { PAID_CALL_SCHEMA } from './paidCallSchema.js';
 
 const PORT = Number(process.env.PORT ?? 8402);
 
@@ -88,31 +91,7 @@ const PRICE = {
  * paying client never has to guess the verb or the body shape.
  * Shape follows the Bazaar/x402 `outputSchema.input` convention: type/method/bodyType/body.
  */
-const PAID_CALL_SCHEMA = {
-  input: {
-    type: 'http',
-    method: 'POST',
-    bodyType: 'json',
-    body: {
-      type: 'object',
-      required: ['intent'],
-      properties: {
-        intent: {
-          type: 'object',
-          description: 'The on-chain intent to verify before execution.',
-          properties: {
-            action: { type: 'string', description: 'e.g. transfer | approve | contractCall' },
-            to: { type: 'string', description: '0x-address of the target' },
-            value: { type: 'string', description: 'amount in base units' },
-            data: { type: 'string', description: 'optional calldata (0x…) — decoded and screened' },
-            chainId: { type: 'number', description: 'optional EVM chain id' },
-          },
-        },
-        rationale: { type: 'string', description: "optional: the agent's stated reason — checked for contradiction" },
-      },
-    },
-  },
-};
+
 
 function x402Challenge() {
   return {

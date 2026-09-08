@@ -33,6 +33,7 @@ import { attestVerdict, attestExecution, verifyAttestation, readAttestations, lo
 import { logEntry, readLedger } from './ledger.js';
 import type { OnchainIntent, Verdict } from './types.js';
 import { hederaAccept, verifyHederaPayment, anchorReceipt } from './hederaRail.js';
+import { PAID_CALL_SCHEMA } from './paidCallSchema.js';
 
 const PORT = Number(process.env.PORT ?? 8402);
 const PAY_TO = process.env.VEA_PAY_TO ?? '0xda9fa90cd39039af4a854e0bd7e3510e6a3ac960';
@@ -108,7 +109,11 @@ const paidRoute = {
   // maxTimeoutSeconds 300, а не 60: их же документация советует давать покупателю запас.
   // 60 с хватает при обычном расчёте, но у меня вещание идёт через очередь на мою машину —
   // лишний запас ничего не стоит, а тесный лимит однажды обрежет медленный, но валидный платёж.
-  accepts: { scheme: 'exact', price: PRICE, network: NETWORK, payTo: PAY_TO, maxTimeoutSeconds: 300 },
+  // outputSchema (08.09): без него клиент платит и НЕ ЗНАЕТ, что звать POST'ом —
+  // пробует GET, получает 405, деньги списаны, услуга не оказана.
+  // Форма вынесена в src/paidCallSchema.ts: один источник на оба тракта.
+  accepts: { scheme: 'exact', price: PRICE, network: NETWORK, payTo: PAY_TO,
+             maxTimeoutSeconds: 300, outputSchema: PAID_CALL_SCHEMA },
   resource: RESOURCE,
   description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
   mimeType: 'application/json',
