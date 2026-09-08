@@ -112,7 +112,24 @@ const paidRoute = {
   // outputSchema (08.09): без него клиент платит и НЕ ЗНАЕТ, что звать POST'ом —
   // пробует GET, получает 405, деньги списаны, услуга не оказана.
   // Форма вынесена в src/paidCallSchema.ts: один источник на оба тракта.
-  accepts: { scheme: 'exact', price: PRICE, network: NETWORK, payTo: PAY_TO,
+  //
+  // ЛЕЖИТ В ДВУХ МЕСТАХ (08.09, после проверки живым запросом).
+  // Правка "положить outputSchema в accepts" была ВЕРНОЙ И НЕДОСТАТОЧНОЙ:
+  // в живом челлендже поля не оказалось. Причина найдена не догадкой, а в коде
+  // SDK - node_modules/@okxweb3/x402-core/dist/cjs/schemas/index.d.ts: в схеме
+  // PaymentRequirements поля outputSchema НЕТ ВОВСЕ, zod срезает незнакомые
+  // ключи молча. Наружу переносится только extra (Record<string, unknown>).
+  //
+  // Безопасность проверена по коду, а не по вере: и клиент, и фасилитатор
+  // (exact/client/index.js:167, exact/facilitator/index.js:602) берут из extra
+  // ИМЕНОВАННЫЕ ключи - const { name, version } = requirements.extra - и
+  // строят домен EIP-712 из четырёх полей. Лишний ключ в extra подпись НЕ ломает.
+  //
+  // Верхний уровень оставлен намеренно: если SDK когда-нибудь добавит поле,
+  // оно поедет само. Источник один - PAID_CALL_SCHEMA, копий нет.
+  accepts: { scheme: 'exact',
+             price: { ...PRICE, extra: { ...PRICE.extra, outputSchema: PAID_CALL_SCHEMA } },
+             network: NETWORK, payTo: PAY_TO,
              maxTimeoutSeconds: 300, outputSchema: PAID_CALL_SCHEMA },
   resource: RESOURCE,
   description: 'Pre-flight verification of one on-chain intent (allow/deny + signed receipt).',
